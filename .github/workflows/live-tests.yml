@@ -1,0 +1,24 @@
+name: Live API smoke tests
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'   # every Monday at 01:00 UTC
+  workflow_dispatch:        # allow manual runs from the Actions tab
+
+jobs:
+  live-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run live API smoke tests
+        run: pytest tests/test_live.py -v
