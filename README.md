@@ -1,177 +1,143 @@
-# NSW Court Listing Scraper
+# Builder Legal Proceedings API
 
-Scrapes the [NSW Online Registry court lists](https://onlineregistry.lawlink.nsw.gov.au/content/court-lists)
-for configured company names and stores results in MySQL.
+Scrapes the [NSW Online Registry](https://onlineregistry.lawlink.nsw.gov.au/content/court-lists)
+for configured building companies and serves the results via a Flask REST API.
 
-Runs as a Docker container, triggered by cron on your Lightsail host.
-
----
-
-## Directory structure
-
-```
-court-scraper/
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── schema.sql          ← run once to set up MySQL
-├── .env.example        ← copy to .env and fill in
-├── cron_setup.sh       ← installs the host cron job
-└── scraper/
-    ├── __init__.py
-    ├── main.py         ← entry point
-    ├── client.py       ← NSW Registry API client
-    └── db.py           ← MySQL helpers
-```
+Multiple trading names for the same builder are grouped via an alias system —
+searching by "Capitol Constructions" returns the same results as "Vogue Homes".
 
 ---
 
-## 1. First-time setup on Lightsail
+## Stack
 
-### Create a MySQL user for the scraper
-
-```sql
-CREATE USER 'scraper_user'@'%' IDENTIFIED BY 'CHANGE_ME';
-GRANT SELECT, INSERT, UPDATE ON court_scraper.* TO 'scraper_user'@'%';
-FLUSH PRIVILEGES;
-```
-
-### Apply the schema
-
-```bash
-mysql -u root -p < schema.sql
-```
-
-### Add companies to scrape
-
-```sql
-USE court_scraper;
-INSERT INTO companies (name, search_term) VALUES
-  ('Capitol Constructions', 'Capitol constructions'),
-  ('Acme Builders', 'Acme builders');   -- add more as needed
-```
+- Python 3.12, Flask 3.1, PostgreSQL 16
+- Docker Compose — Postgres + API both run in containers
+- Data persists in `./postgres_data/` on the host filesystem
 
 ---
 
-## 2. Configure environment
+## Local development
+
+**Prerequisites:** Docker Desktop running.
 
 ```bash
 cp .env.example .env
-nano .env   # fill in DB_PASSWORD and verify other values
+# Set DB_PASSWORD to any value e.g. "localdev"
+
+docker compose up -d db     # starts Postgres, seeds schema on first run
+python app.py               # Flask on http://localhost:5001
 ```
 
-`DB_HOST` should be `host.docker.internal` when running in Docker on Linux
-(the `extra_hosts` line in docker-compose.yml handles the DNS resolution).
+Verify:
+```bash
+curl http://localhost:5001/builders
+curl -X POST http://localhost:5001/builders/Vogue%20Homes/scrape
+curl http://localhost:5001/builders/Vogue%20Homes/hearings
+```
+
+Run the test suite (requires `docker compose up -d db`):
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
 
 ---
 
-## 3. Build the Docker image
+## Deploying to Lightsail
+
+### First-time setup
 
 ```bash
-docker compose build
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker ubuntu    # log out and back in after this
+
+# Clone and configure
+git clone git@github.com:jagberg/Api.Builder.LegalProceedings.git
+cd Api.Builder.LegalProceedings
+cp .env.example .env
+nano .env    # set DB_PASSWORD to something strong
 ```
 
----
-
-## 4. Test run
+### Start the services
 
 ```bash
-# Dry run — fetches from API, prints results, writes nothing to DB
-docker compose run --rm scraper --dry-run --debug
-
-# Real run
-docker compose run --rm scraper
+docker compose up -d db     # Postgres — seeds schema.sql on first run
+docker compose up -d api    # Flask API on port 5001
 ```
 
----
+Verify:
+```bash
+curl http://localhost:5001/builders
+```
 
-## 5. Install cron (runs at 02:30 daily)
+### Set up the daily scrape cron
 
 ```bash
-chmod +x cron_setup.sh
-./cron_setup.sh
+crontab -e
 ```
 
-To change the schedule, edit the `CRON_JOB` line in `cron_setup.sh` before running,
-or edit your crontab directly with `crontab -e`.
-
-Common schedules:
+Add:
 ```
-30 2 * * *    # 02:30 daily          (recommended)
-0 */4 * * *   # every 4 hours        (for fast-changing lists)
-0 1 * * 1     # 01:00 every Monday   (weekly)
+30 2 * * * curl -s -X POST http://localhost:5001/builders/scrape >> ~/logs/court-scraper.log 2>&1
+```
+
+This calls `POST /builders/scrape` at 02:30 daily. Builders are only scraped
+when their `scrape_interval_days` has elapsed since `last_scraped_at`.
+
+### Deploying updates
+
+```bash
+git pull
+docker compose up -d --build api
 ```
 
 ---
 
-## 6. ⚠️ Verify the API endpoint
+## Project structure
 
-The NSW Registry site is a JavaScript SPA that calls an internal REST API.
-The endpoint used in `client.py` is reverse-engineered from the URL fragment.
-
-**You must verify this before relying on the scraper:**
-
-1. Open Chrome DevTools → Network tab → filter by `XHR` / `Fetch`
-2. Navigate to the court lists search URL and run a search
-3. Find the API call (look for JSON responses with listing data)
-4. Update `BASE_API_URL` and the field mapping in `parse_listing()` in `client.py`
-
-The response field names in `parse_listing()` are labelled with ⚠️ comments
-— map them to the actual keys from the API response.
+```
+app.py                    Flask routes
+scraper/
+  client.py               NSW Registry API client + parse_listing()
+  db.py                   All PostgreSQL helpers
+  main.py                 run() — shared by CLI and Flask routes
+schema.sql                DDL + seed data (auto-loaded by Docker on first run)
+specs/
+  api-reference.md        Endpoint docs and TypeScript types for the frontend
+  court-scraper-api/      Full speckit docs (spec, plan, data model, contracts)
+tests/                    74 integration tests + 5 live smoke tests
+.github/workflows/        Weekly live-test CI (runs every Monday)
+```
 
 ---
 
-## 7. Adding more companies
+## Adding a builder
 
+Via the API (auto-creates with 20-day scrape interval):
+```bash
+curl -X POST http://localhost:5001/builders/Metricon%20Homes/scrape
+```
+
+To add aliases for an existing builder, connect to the database directly:
+```bash
+docker compose exec db psql -U scraper_user -d court_scraper
+```
 ```sql
-INSERT INTO companies (name, search_term) VALUES ('Your Company', 'Your company');
-```
-
-To pause scraping a company without deleting it:
-```sql
-UPDATE companies SET is_active = 0 WHERE search_term = 'Your company';
+INSERT INTO builder_aliases (builder_id, alias_name)
+VALUES (1, 'Metricon');
 ```
 
 ---
 
-## 8. Querying results
+## API endpoints
 
-```sql
--- All upcoming listings
-SELECT c.name, cl.listing_date, cl.listing_time, cl.court, cl.courtroom,
-       cl.listing_type, cl.parties
-FROM court_listings cl
-JOIN companies c ON c.id = cl.company_id
-WHERE cl.listing_date >= CURDATE()
-  AND cl.is_active = 1
-ORDER BY cl.listing_date, cl.listing_time;
+See [`specs/api-reference.md`](specs/api-reference.md) for full endpoint docs,
+TypeScript types, and Astro fetch examples.
 
--- New listings found in the last run
-SELECT sr.started_at, c.name, cl.listing_date, cl.court, cl.parties
-FROM court_listings cl
-JOIN scrape_runs sr ON sr.id = cl.first_seen_run
-JOIN companies c ON c.id = cl.company_id
-WHERE cl.first_seen_run = (SELECT MAX(id) FROM scrape_runs WHERE status = 'success')
-ORDER BY cl.listing_date;
-
--- Run history
-SELECT id, started_at, finished_at, status,
-       companies_processed, listings_found, listings_new
-FROM scrape_runs ORDER BY id DESC LIMIT 20;
-```
-
----
-
-## 9. Log rotation (optional but recommended)
-
-```bash
-sudo tee /etc/logrotate.d/court_scraper <<'EOF'
-/var/log/court_scraper_cron.log /path/to/court-scraper/logs/scraper.log {
-    daily
-    rotate 14
-    compress
-    missingok
-    notifempty
-}
-EOF
-```
+| Method | Path | Description |
+|---|---|---|
+| GET | `/builders` | List all builders with aliases |
+| GET | `/builders/{name}/hearings` | Hearings for one builder (alias-aware) |
+| POST | `/builders/{name}/scrape` | Scrape one builder now |
+| POST | `/builders/scrape` | Scrape all due builders (cron target) |
