@@ -2,6 +2,16 @@
 
 Use this file as context when building the Astro frontend.
 
+## Intended page behaviour
+
+The page uses two endpoints together:
+
+1. **`GET /builders`** — called once on load to populate the builder list. Each builder includes all its trading-name aliases, so the page can group hearings under one card per builder (e.g. "Vogue Homes" with aliases "Capitol Constructions" shown beneath).
+
+2. **`GET /builders/{name}/hearings`** — called when a user selects or searches for a builder. Either the canonical name or any alias can be passed — the API resolves them to the same dataset. The response includes `resolved_alias: true` and the canonical `builder_name` when an alias was used, so the UI can show a note like "Showing results for Vogue Homes".
+
+The scrape endpoints are not used by the frontend — scraping is triggered separately via cron.
+
 ## Base URL
 
 ```
@@ -151,81 +161,12 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
 
 ---
 
-### POST /builders/{name}/scrape
-
-Trigger a fresh scrape for one builder against the NSW registry. If the builder does not exist it is auto-created with a 20-day scrape interval.
-
-```
-POST /builders/Vogue%20Homes/scrape
-```
-
-No request body required.
-
-**Response 200** — existing builder
-```json
-{
-  "run_id": 1,
-  "status": "success",
-  "aliases_processed": 2,
-  "listings_found": 14,
-  "listings_new": 3,
-  "builder_created": false,
-  "scrape_interval_days": 1
-}
-```
-
-**Response 201** — builder was auto-created
-```json
-{
-  "run_id": 2,
-  "status": "success",
-  "aliases_processed": 1,
-  "listings_found": 5,
-  "listings_new": 5,
-  "builder_created": true,
-  "scrape_interval_days": 20
-}
-```
-
-| `status` value | Meaning |
-|---|---|
-| `success` | All aliases scraped without error |
-| `partial` | At least one alias errored; others succeeded |
-| `failed` | Unhandled exception |
-
----
-
-### POST /builders/scrape
-
-Scrape all active builders that are **due** based on `scrape_interval_days`. Intended for the daily cron job — builders not yet due are silently skipped.
-
-```
-POST /builders/scrape
-```
-
-No request body required.
-
-**Response 200**
-```json
-{
-  "run_id": 3,
-  "status": "success",
-  "aliases_processed": 4,
-  "listings_found": 28,
-  "listings_new": 7
-}
-```
-
-If no builders are due, all counts are `0`.
-
----
-
 ## Fetch examples (Astro / TypeScript)
 
 ```ts
 const API = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:5001';
 
-// List all builders
+// Load all builders for the grouped page list
 export async function getBuilders(): Promise<Builder[]> {
   const res = await fetch(`${API}/builders`);
   if (!res.ok) throw new Error(`GET /builders → ${res.status}`);
@@ -233,11 +174,11 @@ export async function getBuilders(): Promise<Builder[]> {
   return data.builders;
 }
 
-// Hearings for one builder (alias-aware)
+// Hearings for a selected builder — accepts canonical name or any alias
 export async function getHearings(
   name: string,
   opts: { fromDate?: string; toDate?: string; limit?: number; offset?: number } = {}
-): Promise<HearingsResponse> {
+): Promise<HearingsResponse | null> {
   const params = new URLSearchParams();
   if (opts.fromDate) params.set('from_date', opts.fromDate);
   if (opts.toDate)   params.set('to_date',   opts.toDate);
@@ -248,14 +189,6 @@ export async function getHearings(
   const res = await fetch(url);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`GET /builders/${name}/hearings → ${res.status}`);
-  return res.json();
-}
-
-// Trigger scrape for one builder
-export async function scrapeBuilder(name: string) {
-  const res = await fetch(`${API}/builders/${encodeURIComponent(name)}/scrape`, {
-    method: 'POST',
-  });
   return res.json();
 }
 ```
