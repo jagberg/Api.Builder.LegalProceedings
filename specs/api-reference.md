@@ -12,6 +12,51 @@ The page uses two endpoints together:
 
 The scrape endpoints are not used by the frontend — scraping is triggered separately via cron.
 
+## Running the API locally
+
+The API repo is at `git@github.com:jagberg/Api.Builder.LegalProceedings.git`.
+
+**Prerequisites:** Docker Desktop running.
+
+```bash
+# 1. Clone the API repo (separate from the Astro project)
+git clone git@github.com:jagberg/Api.Builder.LegalProceedings.git
+cd Api.Builder.LegalProceedings
+
+# 2. Create the env file
+cp .env.example .env
+# Edit .env and set DB_PASSWORD to any value e.g. "localdev"
+
+# 3. Start Postgres (seeds schema + Vogue Homes on first run)
+docker compose up -d db
+
+# 4. Start the Flask API
+pip install -r requirements.txt
+py -3 app.py          # Windows
+python3 app.py        # Mac/Linux
+# → Listening on http://localhost:5001
+```
+
+**Verify it's working:**
+```bash
+curl http://localhost:5001/builders
+# Should return Vogue Homes with Capitol Constructions alias
+
+curl "http://localhost:5001/builders/Vogue%20Homes/hearings"
+# Returns empty hearings array until a scrape has run
+
+# Seed some data by triggering a scrape:
+curl -X POST http://localhost:5001/builders/Vogue%20Homes/scrape
+# Then re-check /hearings — results should appear
+```
+
+**Astro env setup** — add to your Astro project's `.env`:
+```
+PUBLIC_API_URL=http://localhost:5001
+```
+
+---
+
 ## Base URL
 
 ```
