@@ -1,0 +1,26 @@
+# Environment / secrets
+.env
+
+# PostgreSQL bind-mount data directory
+postgres_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code internal state
+.claude/

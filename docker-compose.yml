@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-court_scraper}
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME:-court_scraper}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    entrypoint: ["python", "app.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DB_HOST: db    # override .env — reach the db service, not the host
+    ports:
+      - "127.0.0.1:5001:5001"
+    restart: unless-stopped
+
+  scraper:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DB_HOST: db    # override .env — reach the db service, not the host
+    volumes:
+      - ./logs:/app/logs
+    profiles:
+      - scraper      # excluded from 'docker compose up' — run explicitly
