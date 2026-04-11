@@ -85,11 +85,44 @@ Add:
 This calls `POST /builders/scrape` at 02:30 daily. Builders are only scraped
 when their `scrape_interval_days` has elapsed since `last_scraped_at`.
 
-### Deploying updates
+### Deploying updates (manual)
 
 ```bash
 git pull
 docker compose up -d --build api
+```
+
+### Continuous deployment via GitHub Actions
+
+Every push to `main` automatically runs the unit tests then deploys to
+Lightsail if they pass. To enable this, add two secrets to the GitHub repo:
+
+**Settings → Secrets and variables → Actions → New repository secret**
+
+| Secret | Value |
+|---|---|
+| `LIGHTSAIL_HOST` | Public IP of the Lightsail instance |
+| `LIGHTSAIL_SSH_KEY` | Contents of the instance's `.pem` private key |
+
+To get the private key contents:
+```bash
+cat ~/path/to/your-lightsail-key.pem
+```
+Paste the full output (including `-----BEGIN RSA PRIVATE KEY-----` lines) as the secret value.
+
+The Lightsail instance must also be able to `git pull` from GitHub. If you
+cloned via SSH (`git@github.com:...`), add a deploy key:
+
+```bash
+# On the Lightsail instance — generate a deploy key
+ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N ""
+cat ~/.ssh/github_deploy.pub
+```
+
+Add the public key output to **GitHub repo → Settings → Deploy keys** (read-only is enough). Then on the instance:
+```bash
+# Tell git to use it
+git config core.sshCommand "ssh -i ~/.ssh/github_deploy -F /dev/null"
 ```
 
 ---
