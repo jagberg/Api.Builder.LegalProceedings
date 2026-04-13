@@ -24,11 +24,11 @@ class TestListBuilders:
         builders = r.json["builders"]
         assert len(builders) == 1
         b = builders[0]
-        assert b["builder_name"] == "Vogue Homes"
-        assert b["is_active"] is True
-        assert b["scrape_interval_days"] == 1
+        assert b["builderName"] == "Vogue Homes"
+        assert b["isActive"] is True
+        assert b["scrapeIntervalDays"] == 1
         assert set(b["aliases"]) == {"Vogue Homes", "Capitol Constructions"}
-        assert b["last_scraped_at"] is None
+        assert b["lastScrapedAt"] is None
 
     def test_multiple_builders(self, client, db_conn, clean_db):
         with db_conn.cursor() as cur:
@@ -40,7 +40,7 @@ class TestListBuilders:
 
         r = client.get("/builders")
         assert r.status_code == 200
-        names = [b["builder_name"] for b in r.json["builders"]]
+        names = [b["builderName"] for b in r.json["builders"]]
         assert "Builder A" in names
         assert "Builder B" in names
 
@@ -66,12 +66,12 @@ class TestGetHearings:
         assert r.status_code == 200
         data = r.json
         assert data["total"] == 1
-        assert data["builder_name"] == "Vogue Homes"
-        assert data["resolved_alias"] is False
+        assert data["builderName"] == "Vogue Homes"
+        assert data["resolvedAlias"] is False
         h = data["hearings"][0]
-        assert h["external_id"] == "test001ContestedHearing"
-        assert h["case_number"] == "2025/00100001"
-        assert h["listing_date"] == "2026-04-22"
+        assert h["externalId"] == "test001ContestedHearing"
+        assert h["caseNumber"] == "2025/00100001"
+        assert h["listingDate"] == "2026-04-22"
         assert h["court"] == "NCAT CCD"
 
     def test_alias_resolves_to_same_results(self, client, seed_listing):
@@ -79,29 +79,29 @@ class TestGetHearings:
         by_primary = client.get("/builders/Vogue Homes/hearings").json
         by_alias   = client.get("/builders/Capitol Constructions/hearings").json
 
-        assert by_alias["builder_name"]   == "Vogue Homes"
-        assert by_alias["searched_for"]   == "Capitol Constructions"
-        assert by_alias["resolved_alias"] is True
-        assert by_alias["aliases"]        == by_primary["aliases"]
-        assert by_alias["total"]          == by_primary["total"]
-        assert by_alias["hearings"][0]["external_id"] == by_primary["hearings"][0]["external_id"]
+        assert by_alias["builderName"]   == "Vogue Homes"
+        assert by_alias["searchedFor"]   == "Capitol Constructions"
+        assert by_alias["resolvedAlias"] is True
+        assert by_alias["aliases"]       == by_primary["aliases"]
+        assert by_alias["total"]         == by_primary["total"]
+        assert by_alias["hearings"][0]["externalId"] == by_primary["hearings"][0]["externalId"]
 
     def test_response_includes_aliases_list(self, client, seed_listing):
         r = client.get("/builders/Vogue Homes/hearings")
         assert set(r.json["aliases"]) == {"Vogue Homes", "Capitol Constructions"}
 
     def test_date_filter_from_date_excludes_old(self, client, seed_listing):
-        r = client.get("/builders/Vogue Homes/hearings?from_date=2027-01-01")
+        r = client.get("/builders/Vogue Homes/hearings?fromDate=2027-01-01")
         assert r.status_code == 200
         assert r.json["total"] == 0
 
     def test_date_filter_from_date_includes_match(self, client, seed_listing):
-        r = client.get("/builders/Vogue Homes/hearings?from_date=2026-04-01")
+        r = client.get("/builders/Vogue Homes/hearings?fromDate=2026-04-01")
         assert r.status_code == 200
         assert r.json["total"] == 1
 
     def test_date_filter_to_date(self, client, seed_listing):
-        r = client.get("/builders/Vogue Homes/hearings?to_date=2026-04-01")
+        r = client.get("/builders/Vogue Homes/hearings?toDate=2026-04-01")
         assert r.status_code == 200
         assert r.json["total"] == 0
 
@@ -134,50 +134,50 @@ class TestScrapeBuilder:
         r = client.post("/builders/Vogue Homes/scrape")
         assert r.status_code == 200
         data = r.json
-        assert data["builder_created"] is False
-        assert data["aliases_processed"] == 2   # Vogue Homes + Capitol Constructions
-        assert data["listings_found"] == 2       # one hit per alias
-        assert data["listings_new"] == 1         # same external_id → deduped on second alias
+        assert data["builderCreated"] is False
+        assert data["aliasesProcessed"] == 2   # Vogue Homes + Capitol Constructions
+        assert data["listingsFound"] == 2       # one hit per alias
+        assert data["listingsNew"] == 1         # same external_id → deduped on second alias
 
     def test_auto_creates_unknown_builder(self, client, clean_db, mock_nsw_empty):
         r = client.post("/builders/Brand New Builder/scrape")
         assert r.status_code == 201
         data = r.json
-        assert data["builder_created"] is True
-        assert data["scrape_interval_days"] == 20
-        assert data["aliases_processed"] == 1
+        assert data["builderCreated"] is True
+        assert data["scrapeIntervalDays"] == 20
+        assert data["aliasesProcessed"] == 1
 
     def test_auto_created_builder_appears_in_list(self, client, clean_db, mock_nsw_empty):
         client.post("/builders/Brand New Builder/scrape")
         r = client.get("/builders")
-        names = [b["builder_name"] for b in r.json["builders"]]
+        names = [b["builderName"] for b in r.json["builders"]]
         assert "Brand New Builder" in names
 
     def test_auto_created_builder_has_20_day_interval(self, client, clean_db, mock_nsw_empty):
         client.post("/builders/Brand New Builder/scrape")
         r = client.get("/builders")
-        b = next(b for b in r.json["builders"] if b["builder_name"] == "Brand New Builder")
-        assert b["scrape_interval_days"] == 20
+        b = next(b for b in r.json["builders"] if b["builderName"] == "Brand New Builder")
+        assert b["scrapeIntervalDays"] == 20
 
     def test_scrape_writes_listings_to_db(self, client, seed_vogue, mock_nsw_api):
         client.post("/builders/Vogue Homes/scrape")
         r = client.get("/builders/Vogue Homes/hearings")
         assert r.json["total"] == 1
-        assert r.json["hearings"][0]["external_id"] == "test001ContestedHearing"
+        assert r.json["hearings"][0]["externalId"] == "test001ContestedHearing"
 
     def test_scrape_idempotent(self, client, seed_vogue, mock_nsw_api):
         """Running the same scrape twice must not create duplicate listings."""
         client.post("/builders/Vogue Homes/scrape")
         r2 = client.post("/builders/Vogue Homes/scrape")
-        assert r2.json["listings_new"] == 0
+        assert r2.json["listingsNew"] == 0
         r = client.get("/builders/Vogue Homes/hearings")
         assert r.json["total"] == 1
 
     def test_updates_last_scraped_at(self, client, seed_vogue, mock_nsw_empty):
         client.post("/builders/Vogue Homes/scrape")
         r = client.get("/builders")
-        b = next(b for b in r.json["builders"] if b["builder_name"] == "Vogue Homes")
-        assert b["last_scraped_at"] is not None
+        b = next(b for b in r.json["builders"] if b["builderName"] == "Vogue Homes")
+        assert b["lastScrapedAt"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ class TestScrapeAll:
     def test_scrapes_due_builders(self, client, seed_vogue, mock_nsw_api):
         r = client.post("/builders/scrape")
         assert r.status_code == 200
-        assert r.json["aliases_processed"] == 2
+        assert r.json["aliasesProcessed"] == 2
 
     def test_skips_recently_scraped_builder(self, client, db_conn, clean_db, mock_nsw_api):
         """A builder scraped moments ago must be skipped on the next cron call."""
@@ -205,7 +205,7 @@ class TestScrapeAll:
         db_conn.commit()
 
         r = client.post("/builders/scrape")
-        assert r.json["aliases_processed"] == 0
+        assert r.json["aliasesProcessed"] == 0
 
     def test_includes_never_scraped_builder(self, client, db_conn, clean_db, mock_nsw_empty):
         """last_scraped_at IS NULL means the builder is always due."""
@@ -222,11 +222,11 @@ class TestScrapeAll:
         db_conn.commit()
 
         r = client.post("/builders/scrape")
-        assert r.json["aliases_processed"] == 1
+        assert r.json["aliasesProcessed"] == 1
 
     def test_no_due_builders_returns_zero_stats(self, client, db_conn, clean_db):
         """No builders at all → zero everything, no error."""
         r = client.post("/builders/scrape")
         assert r.status_code == 200
-        assert r.json["aliases_processed"] == 0
-        assert r.json["listings_found"] == 0
+        assert r.json["aliasesProcessed"] == 0
+        assert r.json["listingsFound"] == 0

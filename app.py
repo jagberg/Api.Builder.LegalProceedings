@@ -58,6 +58,22 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Map snake_case keys returned by scraper.main.run() to the camelCase form
+# used on the API surface. Keys not in this map pass through unchanged.
+_RUN_RESULT_KEY_MAP = {
+    "run_id":            "runId",
+    "aliases_processed": "aliasesProcessed",
+    "listings_found":    "listingsFound",
+    "listings_new":      "listingsNew",
+    "error_message":     "errorMessage",
+}
+
+
+def _camelize_run_result(result: dict) -> dict:
+    """Transform scraper.main.run() dict keys to camelCase for JSON output."""
+    return {_RUN_RESULT_KEY_MAP.get(k, k): v for k, v in result.items()}
+
+
 def _get_builder_aliases(conn, builder_name: str) -> list | None:
     """
     Return aliases for a builder, or None if the builder does not exist /
@@ -127,12 +143,12 @@ def list_builders():
 
     builders = [
         {
-            "id":                   row["id"],
-            "builder_name":         row["builder_name"],
-            "is_active":            bool(row["is_active"]),
-            "scrape_interval_days": row["scrape_interval_days"],
-            "last_scraped_at":      str(row["last_scraped_at"]) if row["last_scraped_at"] else None,
-            "aliases":              row["aliases"],
+            "id":                 row["id"],
+            "builderName":        row["builder_name"],
+            "isActive":           bool(row["is_active"]),
+            "scrapeIntervalDays": row["scrape_interval_days"],
+            "lastScrapedAt":      str(row["last_scraped_at"]) if row["last_scraped_at"] else None,
+            "aliases":            row["aliases"],
         }
         for row in rows
     ]
@@ -146,8 +162,8 @@ def list_builders():
 @app.route("/builders/<path:name>/hearings", methods=["GET"])
 def get_hearings(name: str):
     searched_for = unquote(name)
-    from_date    = request.args.get("from_date")
-    to_date      = request.args.get("to_date")
+    from_date    = request.args.get("fromDate")
+    to_date      = request.args.get("toDate")
 
     try:
         limit  = min(int(request.args.get("limit",  50)), 200)
@@ -242,20 +258,32 @@ def get_hearings(name: str):
     hearings = []
     for row in rows:
         d = dict(row)
-        for key in ("listing_date", "listing_time", "created_at", "updated_at"):
-            if d[key] is not None:
-                d[key] = str(d[key])
-        hearings.append(d)
+        hearings.append({
+            "externalId":       d["external_id"],
+            "matchedAlias":     d["matched_alias"],
+            "caseNumber":       d["case_number"],
+            "parties":          d["parties"],
+            "listingDate":      str(d["listing_date"]) if d["listing_date"] is not None else None,
+            "listingTime":      str(d["listing_time"]) if d["listing_time"] is not None else None,
+            "court":            d["court"],
+            "location":         d["location"],
+            "courtroom":        d["courtroom"],
+            "jurisdiction":     d["jurisdiction"],
+            "listingType":      d["listing_type"],
+            "presidingOfficer": d["presiding_officer"],
+            "createdAt":        str(d["created_at"]) if d["created_at"] is not None else None,
+            "updatedAt":        str(d["updated_at"]) if d["updated_at"] is not None else None,
+        })
 
     return jsonify({
-        "builder_name":   builder_name,
-        "searched_for":   searched_for,
-        "resolved_alias": searched_for != builder_name,
-        "aliases":        aliases,
-        "total":          total,
-        "offset":         offset,
-        "limit":          limit,
-        "hearings":       hearings,
+        "builderName":   builder_name,
+        "searchedFor":   searched_for,
+        "resolvedAlias": searched_for != builder_name,
+        "aliases":       aliases,
+        "total":         total,
+        "offset":        offset,
+        "limit":         limit,
+        "hearings":      hearings,
     }), 200
 
 
@@ -285,7 +313,7 @@ def scrape_all():
         logger.exception("Scrape failed")
         return jsonify({"error": str(exc)}), 500
 
-    return jsonify(result), 200
+    return jsonify(_camelize_run_result(result)), 200
 
 
 # ---------------------------------------------------------------------------
@@ -323,10 +351,11 @@ def scrape_builder(name: str):
         logger.exception("Scrape failed")
         return jsonify({"error": str(exc)}), 500
 
-    result["builder_created"]     = builder_created
-    result["scrape_interval_days"] = 20 if builder_created else 1
+    out = _camelize_run_result(result)
+    out["builderCreated"]     = builder_created
+    out["scrapeIntervalDays"] = 20 if builder_created else 1
 
-    return jsonify(result), 201 if builder_created else 200
+    return jsonify(out), 201 if builder_created else 200
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ The page uses two endpoints together:
 
 1. **`GET /builders`** — called once on load to populate the builder list. Each builder includes all its trading-name aliases, so the page can group hearings under one card per builder (e.g. "Vogue Homes" with aliases "Capitol Constructions" shown beneath).
 
-2. **`GET /builders/{name}/hearings`** — called when a user selects or searches for a builder. Either the canonical name or any alias can be passed — the API resolves them to the same dataset. The response includes `resolved_alias: true` and the canonical `builder_name` when an alias was used, so the UI can show a note like "Showing results for Vogue Homes".
+2. **`GET /builders/{name}/hearings`** — called when a user selects or searches for a builder. Either the canonical name or any alias can be passed — the API resolves them to the same dataset. The response includes `resolvedAlias: true` and the canonical `builderName` when an alias was used, so the UI can show a note like "Showing results for Vogue Homes".
 
 The scrape endpoints are not used by the frontend — scraping is triggered separately via cron.
 
@@ -64,7 +64,7 @@ http://localhost:5001          # local dev
 http://<lightsail-ip>:5001    # production (internal network only, no auth)
 ```
 
-All responses are `Content-Type: application/json`.
+All responses are `Content-Type: application/json`. All JSON keys and query parameters use camelCase.
 
 ---
 
@@ -73,34 +73,34 @@ All responses are `Content-Type: application/json`.
 ```ts
 interface Builder {
   id: number;
-  builder_name: string;
-  is_active: boolean;
-  scrape_interval_days: number;
-  last_scraped_at: string | null;  // "2026-04-05 02:30:00" or null
+  builderName: string;
+  isActive: boolean;
+  scrapeIntervalDays: number;
+  lastScrapedAt: string | null;   // "2026-04-05 02:30:00" or null
   aliases: string[];
 }
 
 interface Hearing {
-  external_id: string;
-  matched_alias: string;           // which alias matched at scrape time
-  case_number: string;             // "2025/00231569"
-  parties: string;                 // "John Smith v VOGUE HOMES NSW PTY LTD"
-  listing_date: string;            // "2026-04-22"
-  listing_time: string;            // "09:15:00"  (24h, HH:MM:SS)
-  court: string;                   // "NCAT CCD"
-  location: string;                // "NCAT Liverpool (CCD)"
-  courtroom: string;               // "Courtroom 3" | "Unassigned"
-  jurisdiction: string;            // "NCAT"
-  listing_type: string;            // "Contested Hearing"
-  presiding_officer: string | null;
-  created_at: string;              // "2026-04-05 10:00:00"
-  updated_at: string;
+  externalId: string;
+  matchedAlias: string;           // which alias matched at scrape time
+  caseNumber: string;             // "2025/00231569"
+  parties: string;                // "John Smith v VOGUE HOMES NSW PTY LTD"
+  listingDate: string;            // "2026-04-22"
+  listingTime: string;            // "09:15:00"  (24h, HH:MM:SS)
+  court: string;                  // "NCAT CCD"
+  location: string;               // "NCAT Liverpool (CCD)"
+  courtroom: string;              // "Courtroom 3" | "Unassigned"
+  jurisdiction: string;           // "NCAT"
+  listingType: string;            // "Contested Hearing"
+  presidingOfficer: string | null;
+  createdAt: string;              // "2026-04-05 10:00:00"
+  updatedAt: string;
 }
 
 interface HearingsResponse {
-  builder_name: string;       // canonical name e.g. "Vogue Homes"
-  searched_for: string;       // what was passed in the URL
-  resolved_alias: boolean;    // true when searched_for !== builder_name
+  builderName: string;       // canonical name e.g. "Vogue Homes"
+  searchedFor: string;       // what was passed in the URL
+  resolvedAlias: boolean;    // true when searchedFor !== builderName
   aliases: string[];
   total: number;
   offset: number;
@@ -127,10 +127,10 @@ GET /builders
   "builders": [
     {
       "id": 1,
-      "builder_name": "Vogue Homes",
-      "is_active": true,
-      "scrape_interval_days": 1,
-      "last_scraped_at": "2026-04-05 02:30:00",
+      "builderName": "Vogue Homes",
+      "isActive": true,
+      "scrapeIntervalDays": 1,
+      "lastScrapedAt": "2026-04-05 02:30:00",
       "aliases": ["Vogue Homes", "Capitol Constructions"]
     }
   ]
@@ -152,37 +152,37 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `from_date` | YYYY-MM-DD | — | Inclusive start on `listing_date` |
-| `to_date` | YYYY-MM-DD | — | Inclusive end on `listing_date` |
+| `fromDate` | YYYY-MM-DD | — | Inclusive start on `listingDate` |
+| `toDate` | YYYY-MM-DD | — | Inclusive end on `listingDate` |
 | `limit` | integer | 50 | Hard cap: 200 |
 | `offset` | integer | 0 | For pagination |
 
 **Response 200**
 ```json
 {
-  "builder_name": "Vogue Homes",
-  "searched_for": "Capitol Constructions",
-  "resolved_alias": true,
+  "builderName": "Vogue Homes",
+  "searchedFor": "Capitol Constructions",
+  "resolvedAlias": true,
   "aliases": ["Vogue Homes", "Capitol Constructions"],
   "total": 14,
   "offset": 0,
   "limit": 50,
   "hearings": [
     {
-      "external_id": "20250023156931041486ContestedHearing",
-      "matched_alias": "Capitol Constructions",
-      "case_number": "2025/00231569",
+      "externalId": "20250023156931041486ContestedHearing",
+      "matchedAlias": "Capitol Constructions",
+      "caseNumber": "2025/00231569",
       "parties": "Oscar Downing v CAPITOL CONSTRUCTIONS PTY. LIMITED trading as VOGUE HOMES NSW",
-      "listing_date": "2026-04-22",
-      "listing_time": "09:15:00",
+      "listingDate": "2026-04-22",
+      "listingTime": "09:15:00",
       "court": "NCAT CCD",
       "location": "NCAT Liverpool (CCD)",
       "courtroom": "Unassigned",
       "jurisdiction": "NCAT",
-      "listing_type": "Contested Hearing",
-      "presiding_officer": null,
-      "created_at": "2026-04-05 10:00:00",
-      "updated_at": "2026-04-05 10:00:00"
+      "listingType": "Contested Hearing",
+      "presidingOfficer": null,
+      "createdAt": "2026-04-05 10:00:00",
+      "updatedAt": "2026-04-05 10:00:00"
     }
   ]
 }
@@ -199,10 +199,10 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
 ```
 
 **Notes**
-- Results ordered by `listing_date ASC`, `listing_time ASC`
-- `presiding_officer` is frequently `null` — the NSW registry does not always populate it
-- `listing_time` is `HH:MM:SS` (24h). The raw NSW API returns "9:15 am" — the DB normalises it
-- `resolved_alias: false` when the canonical builder name is used directly
+- Results ordered by `listingDate ASC`, `listingTime ASC`
+- `presidingOfficer` is frequently `null` — the NSW registry does not always populate it
+- `listingTime` is `HH:MM:SS` (24h). The raw NSW API returns "9:15 am" — the DB normalises it
+- `resolvedAlias: false` when the canonical builder name is used directly
 
 ---
 
@@ -225,10 +225,10 @@ export async function getHearings(
   opts: { fromDate?: string; toDate?: string; limit?: number; offset?: number } = {}
 ): Promise<HearingsResponse | null> {
   const params = new URLSearchParams();
-  if (opts.fromDate) params.set('from_date', opts.fromDate);
-  if (opts.toDate)   params.set('to_date',   opts.toDate);
-  if (opts.limit)    params.set('limit',      String(opts.limit));
-  if (opts.offset)   params.set('offset',     String(opts.offset));
+  if (opts.fromDate) params.set('fromDate', opts.fromDate);
+  if (opts.toDate)   params.set('toDate',   opts.toDate);
+  if (opts.limit)    params.set('limit',    String(opts.limit));
+  if (opts.offset)   params.set('offset',   String(opts.offset));
 
   const url = `${API}/builders/${encodeURIComponent(name)}/hearings?${params}`;
   const res = await fetch(url);
@@ -244,8 +244,8 @@ export async function getHearings(
 
 | Field | Raw value | Display suggestion |
 |---|---|---|
-| `listing_date` | `"2026-04-22"` | `new Date("2026-04-22").toLocaleDateString('en-AU')` → "22/04/2026" |
-| `listing_time` | `"09:15:00"` | Trim seconds: `"09:15:00".slice(0, 5)` → "09:15" |
-| `last_scraped_at` | `"2026-04-05 02:30:00"` | `new Date("2026-04-05 02:30:00")` (UTC) |
-| `presiding_officer` | `null` or string | Show "—" when null |
-| `resolved_alias` | `true` | Show "Showing results for Vogue Homes" banner |
+| `listingDate` | `"2026-04-22"` | `new Date("2026-04-22").toLocaleDateString('en-AU')` → "22/04/2026" |
+| `listingTime` | `"09:15:00"` | Trim seconds: `"09:15:00".slice(0, 5)` → "09:15" |
+| `lastScrapedAt` | `"2026-04-05 02:30:00"` | `new Date("2026-04-05 02:30:00")` (UTC) |
+| `presidingOfficer` | `null` or string | Show "—" when null |
+| `resolvedAlias` | `true` | Show "Showing results for Vogue Homes" banner |
