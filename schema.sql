@@ -103,6 +103,29 @@ CREATE TRIGGER trg_court_listings_updated_at
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- -----------------------------------------------------------
+-- similar_matches: listings returned by the API that did not
+-- exactly match the searched alias (fuzzy upstream matches).
+-- Kept for human review — flip `reviewed` when inspected.
+-- -----------------------------------------------------------
+CREATE TABLE IF NOT EXISTS similar_matches (
+    id              SERIAL       PRIMARY KEY,
+    builder_id      INTEGER      NOT NULL REFERENCES builders(id),
+    searched_alias  VARCHAR(255) NOT NULL,
+    external_id     VARCHAR(128) NOT NULL,
+    case_number     VARCHAR(64),
+    parties         TEXT,
+    listing_date    DATE,
+    raw_json        JSONB,
+    reviewed        BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE (external_id, searched_alias)
+);
+
+CREATE INDEX IF NOT EXISTS idx_similar_builder  ON similar_matches (builder_id);
+CREATE INDEX IF NOT EXISTS idx_similar_reviewed ON similar_matches (reviewed);
+
+-- -----------------------------------------------------------
 -- Seed: Vogue Homes builder with two aliases
 -- -----------------------------------------------------------
 INSERT INTO builders (builder_name) VALUES ('Vogue Homes')

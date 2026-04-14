@@ -23,7 +23,7 @@ load_dotenv()
 MOCK_HIT = {
     "id": "test001ContestedHearing",
     "scm_case_number": "2025/00100001",
-    "case_title": "John Smith v VOGUE HOMES NSW PTY LTD",
+    "case_title": "John Smith v CAPITOL CONSTRUCTIONS PTY LTD trading as VOGUE HOMES NSW",
     "scm_dateyear": "22 Apr 2026",
     "time_listed": "9:15 am",
     "scm_jurisdiction_court_short": "NCAT CCD",
@@ -33,8 +33,22 @@ MOCK_HIT = {
     "jl_listing_type_ds": "Contested Hearing",
 }
 
+MOCK_HIT_FUZZY = {
+    "id": "test002FuzzyMatch",
+    "scm_case_number": "2025/00200002",
+    "case_title": "Jane Doe v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD",
+    "scm_dateyear": "25 Apr 2026",
+    "time_listed": "10:00 am",
+    "scm_jurisdiction_court_short": "NCAT CCD",
+    "location": "NCAT Sydney (CCD)",
+    "court_room_name": "Courtroom 1",
+    "scm_jurisdiction_type": "NCAT",
+    "jl_listing_type_ds": "Directions Hearing",
+}
+
 MOCK_NSW_RESPONSE = {"hits": [MOCK_HIT], "total": 1, "offset": 0, "count": 30}
-MOCK_NSW_EMPTY    = {"hits": [],          "total": 0, "offset": 0, "count": 30}
+MOCK_NSW_FUZZY    = {"hits": [MOCK_HIT_FUZZY], "total": 1, "offset": 0, "count": 30}
+MOCK_NSW_EMPTY    = {"hits": [],               "total": 0, "offset": 0, "count": 30}
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +77,7 @@ def clean_db(db_conn):
     with db_conn.cursor() as cur:
         cur.execute(
             """
-            TRUNCATE court_listings, scrape_runs, builder_aliases, builders
+            TRUNCATE court_listings, similar_matches, scrape_runs, builder_aliases, builders
             RESTART IDENTITY CASCADE
             """
         )
@@ -113,7 +127,7 @@ def seed_listing(db_conn, seed_vogue):
                 raw_json, first_seen_run, last_seen_run
             ) VALUES (
                 'test001ContestedHearing', %s, 'Capitol Constructions',
-                '2025/00100001', 'John Smith v VOGUE HOMES NSW PTY LTD',
+                '2025/00100001', 'John Smith v CAPITOL CONSTRUCTIONS PTY LTD trading as VOGUE HOMES NSW',
                 '2026-04-22', '09:15:00',
                 'NCAT CCD', 'NCAT Liverpool (CCD)', 'Courtroom 3',
                 'NCAT', 'Contested Hearing',
@@ -158,5 +172,15 @@ def mock_nsw_empty():
     mock_resp = Mock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = MOCK_NSW_EMPTY
+    with patch("requests.Session.get", return_value=mock_resp):
+        yield
+
+
+@pytest.fixture()
+def mock_nsw_fuzzy():
+    """Patch requests.Session.get to return a fuzzy (non-exact) match."""
+    mock_resp = Mock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = MOCK_NSW_FUZZY
     with patch("requests.Session.get", return_value=mock_resp):
         yield

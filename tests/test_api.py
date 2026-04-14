@@ -230,3 +230,36 @@ class TestScrapeAll:
         assert r.status_code == 200
         assert r.json["aliasesProcessed"] == 0
         assert r.json["listingsFound"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Scrape filter: exact vs similar matches
+# ---------------------------------------------------------------------------
+
+class TestScrapeFilter:
+    def test_fuzzy_match_goes_to_similar_matches(self, client, db_conn, seed_vogue, mock_nsw_fuzzy):
+        """A listing whose parties don't contain the alias goes to similar_matches."""
+        client.post("/builders/Vogue Homes/scrape")
+
+        # Not in court_listings
+        r = client.get("/builders/Vogue Homes/hearings")
+        assert r.json["total"] == 0
+
+        # Is in similar_matches
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT searched_alias, reviewed FROM similar_matches")
+            rows = cur.fetchall()
+        assert len(rows) > 0
+        assert any(row[1] is False for row in rows)  # reviewed defaults to False
+
+    def test_exact_match_goes_to_court_listings(self, client, db_conn, seed_vogue, mock_nsw_api):
+        """A listing whose parties contain the alias ends up in court_listings."""
+        client.post("/builders/Vogue Homes/scrape")
+
+        r = client.get("/builders/Vogue Homes/hearings")
+        assert r.json["total"] == 1
+
+        # Nothing in similar_matches for this listing
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM similar_matches WHERE external_id = 'test001ContestedHearing'")
+            assert cur.fetchone()[0] == 0

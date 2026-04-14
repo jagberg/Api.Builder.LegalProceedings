@@ -18,11 +18,13 @@ from scraper.client import RegistryClient, parse_listing
 from scraper.db import (
     get_connection,
     fetch_active_aliases,
+    insert_similar_match,
     start_run,
     finish_run,
     update_builders_last_scraped,
     upsert_listing,
 )
+from scraper.matching import alias_matches_parties
 
 load_dotenv()
 
@@ -94,6 +96,15 @@ def run(dry_run: bool = False, aliases: list[dict] | None = None) -> dict:
 
                 if not listing["external_id"]:
                     logger.warning(f"Listing missing external_id, skipping: {raw}")
+                    continue
+
+                if not alias_matches_parties(alias_name, listing["parties"]):
+                    logger.info(
+                        f"Similar but non-exact match for {alias_name!r}: "
+                        f"{listing['external_id']} parties={listing['parties']!r}"
+                    )
+                    if not dry_run:
+                        insert_similar_match(conn, builder_id, alias_name, listing)
                     continue
 
                 if dry_run:

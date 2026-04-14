@@ -187,3 +187,34 @@ def upsert_listing(conn, builder_id: int, matched_alias: str, run_id: int,
         is_new = cur.fetchone()[0]
     conn.commit()
     return bool(is_new)
+
+
+def insert_similar_match(conn, builder_id: int, searched_alias: str,
+                         listing: dict) -> bool:
+    """
+    Record a listing that the upstream API returned but that didn't exactly
+    match the searched alias.  ON CONFLICT DO NOTHING keeps it idempotent.
+    Returns True if a row was actually inserted.
+    """
+    sql = """
+        INSERT INTO similar_matches (
+            builder_id, searched_alias, external_id,
+            case_number, parties, listing_date, raw_json
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s
+        )
+        ON CONFLICT (external_id, searched_alias) DO NOTHING
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (
+            builder_id,
+            searched_alias,
+            listing["external_id"],
+            listing.get("case_number"),
+            listing.get("parties"),
+            listing.get("listing_date"),
+            json.dumps(listing.get("raw_json", {})),
+        ))
+        inserted = cur.rowcount == 1
+    conn.commit()
+    return inserted

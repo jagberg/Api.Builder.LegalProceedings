@@ -85,11 +85,32 @@ court_listings
 
 ---
 
+### Similar Match
+Listings returned by the upstream API that did not exactly match the searched alias (fuzzy upstream matches). Kept for human review — flip `reviewed` to `TRUE` when inspected. If the match is legitimate, add an alias to `builder_aliases` and re-scrape.
+
+```
+similar_matches
+├── id              SERIAL PRIMARY KEY
+├── builder_id      INT FK → builders.id
+├── searched_alias  VARCHAR(255)          — the alias that was searched
+├── external_id     VARCHAR(128)          — NSW registry ID
+├── case_number     VARCHAR(64)
+├── parties         TEXT
+├── listing_date    DATE
+├── raw_json        JSONB
+├── reviewed        BOOLEAN DEFAULT FALSE — user-managed review flag
+├── created_at      TIMESTAMP
+└── UNIQUE (external_id, searched_alias)
+```
+
+---
+
 ## Key Relationships
 
 ```
 builders 1──* builder_aliases
-builders 1──* court_listings   (via builder_id)
+builders 1──* court_listings    (via builder_id)
+builders 1──* similar_matches   (via builder_id)
 scrape_runs 1──* court_listings (via first_seen_run, last_seen_run)
 ```
 

@@ -11,6 +11,7 @@ from scraper.db import (
     create_builder,
     fetch_active_aliases,
     finish_run,
+    insert_similar_match,
     start_run,
     update_builders_last_scraped,
     upsert_listing,
@@ -220,3 +221,55 @@ class TestScrapeRuns:
         assert row[1] == 2
         assert row[2] == 10
         assert row[3] == 3
+
+
+# ---------------------------------------------------------------------------
+# insert_similar_match
+# ---------------------------------------------------------------------------
+
+class TestInsertSimilarMatch:
+    @pytest.fixture()
+    def sample_listing(self):
+        return {
+            "external_id":  "test002FuzzyMatch",
+            "case_number":  "2025/00200002",
+            "parties":      "Jane Doe v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD",
+            "listing_date": "2026-04-25",
+            "raw_json":     {"id": "test002FuzzyMatch"},
+        }
+
+    def test_insert_returns_true(self, db_conn, seed_vogue, sample_listing):
+        assert insert_similar_match(db_conn, seed_vogue, "Capitol Constructions", sample_listing) is True
+
+    def test_duplicate_returns_false(self, db_conn, seed_vogue, sample_listing):
+        insert_similar_match(db_conn, seed_vogue, "Capitol Constructions", sample_listing)
+        assert insert_similar_match(db_conn, seed_vogue, "Capitol Constructions", sample_listing) is False
+
+    def test_row_stored_in_db(self, db_conn, seed_vogue, sample_listing):
+        insert_similar_match(db_conn, seed_vogue, "Capitol Constructions", sample_listing)
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT searched_alias, case_number, parties FROM similar_matches WHERE external_id = %s",
+                ("test002FuzzyMatch",),
+            )
+            row = cur.fetchone()
+        assert row[0] == "Capitol Constructions"
+        assert row[1] == "2025/00200002"
+        assert "CAPITAL CONSTRUCTION" in row[2]
+
+    def test_reviewed_defaults_to_false(self, db_conn, seed_vogue, sample_listing):
+        insert_similar_match(db_conn, seed_vogue, "Capitol Constructions", sample_listing)
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT reviewed FROM similar_matches WHERE external_id = %s",
+                ("test002FuzzyMatch",),
+            )
+            assert cur.fetchone()[0] is False
+
+    def test_different_alias_same_external_id_creates_two_rows(self, db_conn, seed_vogue, sample_listing):
+        insert_similar_match(db_conn, seed_vogue, "Capitol Constructions", sample_listing)
+        assert insert_similar_match(db_conn, seed_vogue, "Vogue Homes", sample_listing) is True
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM similar_matches WHERE external_id = %s",
+                        ("test002FuzzyMatch",))
+            assert cur.fetchone()[0] == 2
