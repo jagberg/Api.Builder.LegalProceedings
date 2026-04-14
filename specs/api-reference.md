@@ -52,7 +52,7 @@ curl -X POST http://localhost:5001/builders/Vogue%20Homes/scrape
 
 **Astro env setup** — add to your Astro project's `.env`:
 ```
-PUBLIC_API_URL=http://localhost:5001
+PUBLIC_API_URL=http://52.63.163.160:5001
 ```
 
 ---
@@ -61,7 +61,7 @@ PUBLIC_API_URL=http://localhost:5001
 
 ```
 http://localhost:5001          # local dev
-http://<lightsail-ip>:5001    # production (internal network only, no auth)
+http://52.63.163.160:5001     # production
 ```
 
 All responses are `Content-Type: application/json`. All JSON keys and query parameters use camelCase.
@@ -209,7 +209,7 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
 ## Fetch examples (Astro / TypeScript)
 
 ```ts
-const API = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:5001';
+const API = import.meta.env.PUBLIC_API_URL ?? 'http://52.63.163.160:5001';
 
 // Load all builders for the grouped page list
 export async function getBuilders(): Promise<Builder[]> {
