@@ -50,16 +50,25 @@ class TestListBuilders:
 # ---------------------------------------------------------------------------
 
 class TestGetHearings:
-    def test_unknown_builder_auto_creates_and_scrapes(self, client, clean_db, mock_nsw_empty):
+    def test_unknown_builder_auto_creates_with_empty_results(self, client, clean_db, mock_nsw_empty):
         """Searching an unknown builder auto-creates it and returns 200."""
         r = client.get("/builders/Nobody/hearings")
         assert r.status_code == 200
         assert r.json["builderName"] == "Nobody"
         assert r.json["hearings"] == []
+        assert r.json["similarMatches"] == []
         # Builder should now exist
         r2 = client.get("/builders")
         names = [b["builderName"] for b in r2.json["builders"]]
         assert "Nobody" in names
+
+    def test_unknown_builder_results_go_to_similar_matches(self, client, clean_db, mock_nsw_api):
+        """For a new builder, ALL upstream results go to similarMatches, not hearings."""
+        r = client.get("/builders/New Builder/hearings")
+        assert r.status_code == 200
+        assert r.json["hearings"] == []
+        assert r.json["total"] == 0
+        assert len(r.json["similarMatches"]) > 0
 
     def test_returns_empty_when_no_listings(self, client, seed_vogue):
         r = client.get("/builders/Vogue Homes/hearings")

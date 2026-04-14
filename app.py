@@ -35,10 +35,12 @@ import psycopg2.extras
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 
+from scraper.client import RegistryClient, parse_listing
 from scraper.db import (
     create_builder,
     fetch_active_aliases,
     get_connection,
+    insert_similar_match,
 )
 from scraper.main import run
 
@@ -193,28 +195,34 @@ def get_hearings(name: str):
                 builder = cur.fetchone()
 
             if not builder:
-                # Auto-create and scrape so the search returns live results.
-                # Exact alias matches land in court_listings (hearings),
-                # fuzzy results land in similar_matches (similarMatches).
+                # Auto-create the builder, then do a live search.
+                # ALL results go to similar_matches for review — nothing
+                # goes to court_listings until the user approves aliases.
                 create_builder(conn, searched_for, scrape_interval_days=20)
-                aliases_list = _get_builder_aliases(conn, searched_for)
-                conn.close()
                 logger.info(
                     f"Auto-created builder {searched_for!r} via hearings search"
                 )
-                try:
-                    run(aliases=aliases_list)
-                except Exception as exc:
-                    logger.error(f"Scrape failed for new builder: {exc}")
-                conn = get_connection()
 
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT DISTINCT b.id, b.builder_name "
-                        "FROM builders b WHERE b.builder_name = %s",
+                        "SELECT id, builder_name FROM builders "
+                        "WHERE builder_name = %s",
                         (searched_for,),
                     )
                     builder = cur.fetchone()
+
+                try:
+                    client_api = RegistryClient()
+                    for raw in client_api.search(searched_for):
+                        listing = parse_listing(raw)
+                        if listing["external_id"]:
+                            insert_similar_match(
+                                conn, builder["id"], searched_for, listing,
+                            )
+                except Exception as exc:
+                    logger.error(
+                        f"Live search failed for {searched_for!r}: {exc}"
+                    )
 
             builder_id   = builder["id"]
             builder_name = builder["builder_name"]   # canonical primary name
