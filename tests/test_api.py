@@ -263,3 +263,123 @@ class TestScrapeFilter:
         with db_conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM similar_matches WHERE external_id = 'test001ContestedHearing'")
             assert cur.fetchone()[0] == 0
+
+    def test_similar_matches_in_hearings_response(self, client, db_conn, seed_vogue, mock_nsw_fuzzy):
+        """Hearings response includes unreviewed similar matches."""
+        client.post("/builders/Vogue Homes/scrape")
+        r = client.get("/builders/Vogue Homes/hearings")
+        assert r.status_code == 200
+        assert "similarMatches" in r.json
+        assert len(r.json["similarMatches"]) > 0
+        sm = r.json["similarMatches"][0]
+        assert "id" in sm
+        assert "searchedAlias" in sm
+        assert "parties" in sm
+
+    def test_similar_matches_empty_when_none(self, client, seed_vogue):
+        """Hearings response returns empty similarMatches when there are none."""
+        r = client.get("/builders/Vogue Homes/hearings")
+        assert r.json["similarMatches"] == []
+
+
+# ---------------------------------------------------------------------------
+# POST /similar-matches/<id>/approve and /dismiss
+# ---------------------------------------------------------------------------
+
+class TestSimilarMatchActions:
+    def _seed_similar_match(self, db_conn, builder_id):
+        """Insert a similar match and return its id."""
+        with db_conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO similar_matches (builder_id, searched_alias, external_id,
+                    case_number, parties, listing_date)
+                VALUES (%s, 'Capitol Constructions', 'fuzzy001',
+                    '2025/00999999',
+                    'Jane Doe v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD',
+                    '2026-05-01')
+                RETURNING id
+                """,
+                (builder_id,),
+            )
+            match_id = cur.fetchone()[0]
+        db_conn.commit()
+        return match_id
+
+    def test_approve_adds_alias_and_marks_reviewed(self, client, db_conn, seed_vogue):
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        r = client.post(f"/similar-matches/{match_id}/approve")
+        assert r.status_code == 200
+        assert r.json["approved"] is True
+        assert r.json["aliasAdded"] == "Capitol Constructions"
+
+        # Verify reviewed flag
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT reviewed FROM similar_matches WHERE id = %s", (match_id,))
+            assert cur.fetchone()[0] is True
+
+    def test_approve_alias_appears_in_builder(self, client, db_conn, clean_db):
+        """After approve, the alias shows up in GET /builders."""
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO builders (builder_name, scrape_interval_days) "
+                "VALUES ('Test Builder', 1) RETURNING id"
+            )
+            bid = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO builder_aliases (builder_id, alias_name) VALUES (%s, 'Test Builder')",
+                (bid,),
+            )
+            cur.execute(
+                """
+                INSERT INTO similar_matches (builder_id, searched_alias, external_id, parties)
+                VALUES (%s, 'Test Alias', 'fuzzy002', 'Some v TEST ALIAS PTY LTD')
+                RETURNING id
+                """,
+                (bid,),
+            )
+            match_id = cur.fetchone()[0]
+        db_conn.commit()
+
+        client.post(f"/similar-matches/{match_id}/approve")
+        r = client.get("/builders")
+        b = next(b for b in r.json["builders"] if b["builderName"] == "Test Builder")
+        assert "Test Alias" in b["aliases"]
+
+    def test_approve_already_reviewed_returns_409(self, client, db_conn, seed_vogue):
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        client.post(f"/similar-matches/{match_id}/approve")
+        r = client.post(f"/similar-matches/{match_id}/approve")
+        assert r.status_code == 409
+
+    def test_approve_not_found_returns_404(self, client, clean_db):
+        r = client.post("/similar-matches/99999/approve")
+        assert r.status_code == 404
+
+    def test_dismiss_marks_reviewed(self, client, db_conn, seed_vogue):
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        r = client.post(f"/similar-matches/{match_id}/dismiss")
+        assert r.status_code == 200
+        assert r.json["dismissed"] is True
+
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT reviewed FROM similar_matches WHERE id = %s", (match_id,))
+            assert cur.fetchone()[0] is True
+
+    def test_dismiss_does_not_add_alias(self, client, db_conn, seed_vogue):
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        r = client.get("/builders/Vogue Homes/hearings")
+        aliases_before = set(r.json["aliases"])
+
+        client.post(f"/similar-matches/{match_id}/dismiss")
+
+        r = client.get("/builders/Vogue Homes/hearings")
+        assert set(r.json["aliases"]) == aliases_before
+
+    def test_dismissed_not_in_similar_matches_response(self, client, db_conn, seed_vogue):
+        """After dismiss, the match no longer appears in hearings.similarMatches."""
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        client.post(f"/similar-matches/{match_id}/dismiss")
+        r = client.get("/builders/Vogue Homes/hearings")
+        ids = [sm["id"] for sm in r.json["similarMatches"]]
+        assert match_id not in ids

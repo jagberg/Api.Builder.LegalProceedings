@@ -249,6 +249,21 @@ def get_hearings(name: str):
                     params + [limit, offset],
                 )
                 rows = cur.fetchall()
+
+            # Unreviewed similar matches for this builder
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT sm.id, sm.searched_alias, sm.external_id,
+                           sm.case_number, sm.parties, sm.listing_date,
+                           sm.created_at
+                      FROM similar_matches sm
+                     WHERE sm.builder_id = %s AND sm.reviewed = FALSE
+                     ORDER BY sm.listing_date ASC NULLS LAST, sm.created_at DESC
+                    """,
+                    (builder_id,),
+                )
+                similar_rows = cur.fetchall()
         finally:
             conn.close()
     except Exception as exc:
@@ -275,15 +290,29 @@ def get_hearings(name: str):
             "updatedAt":        str(d["updated_at"]) if d["updated_at"] is not None else None,
         })
 
+    similar_matches = []
+    for row in similar_rows:
+        d = dict(row)
+        similar_matches.append({
+            "id":             d["id"],
+            "searchedAlias":  d["searched_alias"],
+            "externalId":     d["external_id"],
+            "caseNumber":     d["case_number"],
+            "parties":        d["parties"],
+            "listingDate":    str(d["listing_date"]) if d["listing_date"] is not None else None,
+            "createdAt":      str(d["created_at"]) if d["created_at"] is not None else None,
+        })
+
     return jsonify({
-        "builderName":   builder_name,
-        "searchedFor":   searched_for,
-        "resolvedAlias": searched_for != builder_name,
-        "aliases":       aliases,
-        "total":         total,
-        "offset":        offset,
-        "limit":         limit,
-        "hearings":      hearings,
+        "builderName":    builder_name,
+        "searchedFor":    searched_for,
+        "resolvedAlias":  searched_for != builder_name,
+        "aliases":        aliases,
+        "total":          total,
+        "offset":         offset,
+        "limit":          limit,
+        "hearings":       hearings,
+        "similarMatches": similar_matches,
     }), 200
 
 
@@ -356,6 +385,85 @@ def scrape_builder(name: str):
     out["scrapeIntervalDays"] = 20 if builder_created else 1
 
     return jsonify(out), 201 if builder_created else 200
+
+
+# ---------------------------------------------------------------------------
+# POST /similar-matches/<id>/approve — add alias + mark reviewed
+# ---------------------------------------------------------------------------
+
+@app.route("/similar-matches/<int:match_id>/approve", methods=["POST"])
+def approve_similar(match_id: int):
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT id, builder_id, searched_alias, reviewed "
+                    "FROM similar_matches WHERE id = %s",
+                    (match_id,),
+                )
+                match = cur.fetchone()
+
+            if not match:
+                return jsonify({"error": f"Similar match not found: {match_id}"}), 404
+
+            if match["reviewed"]:
+                return jsonify({"error": "Already reviewed"}), 409
+
+            # Add the searched alias as a new builder alias
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO builder_aliases (builder_id, alias_name)
+                    VALUES (%s, %s)
+                    ON CONFLICT (alias_name) DO NOTHING
+                    """,
+                    (match["builder_id"], match["searched_alias"]),
+                )
+                cur.execute(
+                    "UPDATE similar_matches SET reviewed = TRUE WHERE id = %s",
+                    (match_id,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.exception("Approve failed")
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({
+        "id":       match_id,
+        "approved": True,
+        "aliasAdded": match["searched_alias"],
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# POST /similar-matches/<id>/dismiss — mark reviewed without adding alias
+# ---------------------------------------------------------------------------
+
+@app.route("/similar-matches/<int:match_id>/dismiss", methods=["POST"])
+def dismiss_similar(match_id: int):
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE similar_matches SET reviewed = TRUE WHERE id = %s AND reviewed = FALSE",
+                    (match_id,),
+                )
+                updated = cur.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.exception("Dismiss failed")
+        return jsonify({"error": str(exc)}), 500
+
+    if updated == 0:
+        return jsonify({"error": f"Similar match not found or already reviewed: {match_id}"}), 404
+
+    return jsonify({"id": match_id, "dismissed": True}), 200
 
 
 if __name__ == "__main__":

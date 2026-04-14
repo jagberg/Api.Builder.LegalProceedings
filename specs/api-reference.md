@@ -97,6 +97,16 @@ interface Hearing {
   updatedAt: string;
 }
 
+interface SimilarMatch {
+  id: number;                      // use this ID for approve/dismiss actions
+  searchedAlias: string;           // the alias that was searched
+  externalId: string;
+  caseNumber: string;
+  parties: string;                 // party names — inspect to decide if it's a real match
+  listingDate: string | null;
+  createdAt: string | null;
+}
+
 interface HearingsResponse {
   builderName: string;       // canonical name e.g. "Vogue Homes"
   searchedFor: string;       // what was passed in the URL
@@ -106,6 +116,7 @@ interface HearingsResponse {
   offset: number;
   limit: number;
   hearings: Hearing[];
+  similarMatches: SimilarMatch[];  // unreviewed fuzzy matches pending review
 }
 ```
 
@@ -184,6 +195,17 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
       "createdAt": "2026-04-05 10:00:00",
       "updatedAt": "2026-04-05 10:00:00"
     }
+  ],
+  "similarMatches": [
+    {
+      "id": 3,
+      "searchedAlias": "Capitol Constructions",
+      "externalId": "test002FuzzyMatch",
+      "caseNumber": "2025/00200002",
+      "parties": "Erica Lilith Mann v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD",
+      "listingDate": "2026-04-25",
+      "createdAt": "2026-04-14 10:14:44"
+    }
   ]
 }
 ```
@@ -203,6 +225,42 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
 - `presidingOfficer` is frequently `null` — the NSW registry does not always populate it
 - `listingTime` is `HH:MM:SS` (24h). The raw NSW API returns "9:15 am" — the DB normalises it
 - `resolvedAlias: false` when the canonical builder name is used directly
+- `similarMatches` contains only unreviewed fuzzy matches — once approved or dismissed, they disappear from the response
+
+---
+
+### POST /similar-matches/{id}/approve
+
+Approve a similar match — adds the `searchedAlias` as a new builder alias and marks the match as reviewed. Future scrapes will capture results for this alias automatically.
+
+```
+POST /similar-matches/3/approve
+```
+
+**Response 200**
+```json
+{ "id": 3, "approved": true, "aliasAdded": "Capitol Constructions" }
+```
+
+**Response 404** — match not found
+**Response 409** — already reviewed
+
+---
+
+### POST /similar-matches/{id}/dismiss
+
+Mark a similar match as reviewed without adding an alias. Removes it from future `similarMatches` responses.
+
+```
+POST /similar-matches/3/dismiss
+```
+
+**Response 200**
+```json
+{ "id": 3, "dismissed": true }
+```
+
+**Response 404** — match not found or already reviewed
 
 ---
 
@@ -234,6 +292,18 @@ export async function getHearings(
   const res = await fetch(url);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`GET /builders/${name}/hearings → ${res.status}`);
+  return res.json();
+}
+
+// Approve a similar match — adds it as an alias for future scrapes
+export async function approveSimilarMatch(id: number) {
+  const res = await fetch(`${API}/similar-matches/${id}/approve`, { method: 'POST' });
+  return res.json();
+}
+
+// Dismiss a similar match — removes it from the list without adding an alias
+export async function dismissSimilarMatch(id: number) {
+  const res = await fetch(`${API}/similar-matches/${id}/dismiss`, { method: 'POST' });
   return res.json();
 }
 ```
