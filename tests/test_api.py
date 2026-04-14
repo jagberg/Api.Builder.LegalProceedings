@@ -50,10 +50,16 @@ class TestListBuilders:
 # ---------------------------------------------------------------------------
 
 class TestGetHearings:
-    def test_unknown_builder_returns_404(self, client, clean_db):
+    def test_unknown_builder_auto_creates_and_scrapes(self, client, clean_db, mock_nsw_empty):
+        """Searching an unknown builder auto-creates it and returns 200."""
         r = client.get("/builders/Nobody/hearings")
-        assert r.status_code == 404
-        assert "not found" in r.json["error"].lower()
+        assert r.status_code == 200
+        assert r.json["builderName"] == "Nobody"
+        assert r.json["hearings"] == []
+        # Builder should now exist
+        r2 = client.get("/builders")
+        names = [b["builderName"] for b in r2.json["builders"]]
+        assert "Nobody" in names
 
     def test_returns_empty_when_no_listings(self, client, seed_vogue):
         r = client.get("/builders/Vogue Homes/hearings")

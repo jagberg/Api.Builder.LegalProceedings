@@ -210,17 +210,13 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
 }
 ```
 
-**Response 404**
-```json
-{ "error": "Builder not found: Acme Constructions" }
-```
-
 **Response 400** (non-integer limit/offset)
 ```json
 { "error": "limit and offset must be integers" }
 ```
 
 **Notes**
+- If the builder name is unknown, the API auto-creates it (20-day scrape interval) and runs a live search against the NSW registry. Exact word-boundary matches land in `hearings`, everything else in `similarMatches`. This means a search always returns results — no 404.
 - Results ordered by `listingDate ASC`, `listingTime ASC`
 - `presidingOfficer` is frequently `null` — the NSW registry does not always populate it
 - `listingTime` is `HH:MM:SS` (24h). The raw NSW API returns "9:15 am" — the DB normalises it

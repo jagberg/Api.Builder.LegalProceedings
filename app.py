@@ -193,7 +193,28 @@ def get_hearings(name: str):
                 builder = cur.fetchone()
 
             if not builder:
-                return jsonify({"error": f"Builder not found: {searched_for}"}), 404
+                # Auto-create and scrape so the search returns live results.
+                # Exact alias matches land in court_listings (hearings),
+                # fuzzy results land in similar_matches (similarMatches).
+                create_builder(conn, searched_for, scrape_interval_days=20)
+                aliases_list = _get_builder_aliases(conn, searched_for)
+                conn.close()
+                logger.info(
+                    f"Auto-created builder {searched_for!r} via hearings search"
+                )
+                try:
+                    run(aliases=aliases_list)
+                except Exception as exc:
+                    logger.error(f"Scrape failed for new builder: {exc}")
+                conn = get_connection()
+
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT DISTINCT b.id, b.builder_name "
+                        "FROM builders b WHERE b.builder_name = %s",
+                        (searched_for,),
+                    )
+                    builder = cur.fetchone()
 
             builder_id   = builder["id"]
             builder_name = builder["builder_name"]   # canonical primary name
