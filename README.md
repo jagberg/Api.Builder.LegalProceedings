@@ -6,6 +6,10 @@ for configured building companies and serves the results via a Flask REST API.
 Multiple trading names for the same builder are grouped via an alias system —
 searching by "Capitol Constructions" returns the same results as "Vogue Homes".
 
+The scraper filters out fuzzy matches from the upstream API (e.g. "CAPITAL
+CONSTRUCTION AND REFURBISHING" when searching "Capitol Constructions") and
+stores them in a `similar_matches` table for review.
+
 ---
 
 ## Stack
@@ -135,12 +139,13 @@ scraper/
   client.py               NSW Registry API client + parse_listing()
   db.py                   All PostgreSQL helpers
   main.py                 run() — shared by CLI and Flask routes
+  matching.py             Alias-to-parties word-boundary filter
 schema.sql                DDL + seed data (auto-loaded by Docker on first run)
 specs/
   api-reference.md        Endpoint docs and TypeScript types for the frontend
   court-scraper-api/      Full speckit docs (spec, plan, data model, contracts)
-tests/                    74 integration tests + 5 live smoke tests
-.github/workflows/        Weekly live-test CI (runs every Monday)
+tests/                    Integration tests, matching unit tests, live smoke tests
+.github/workflows/        Weekly live-test CI + deploy-on-push CD
 ```
 
 ---
@@ -160,6 +165,69 @@ docker compose exec db psql -U scraper_user -d court_scraper
 INSERT INTO builder_aliases (builder_id, alias_name)
 VALUES (1, 'Metricon');
 ```
+
+---
+
+## Reviewing similar matches
+
+The NSW Registry API does fuzzy matching, so searching "Capitol Constructions"
+may also return results for "CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD".
+These near-misses are filtered out at scrape time and stored in the
+`similar_matches` table for review.
+
+Connect to the database:
+```bash
+docker compose exec db psql -U scraper_user -d court_scraper
+```
+
+View unreviewed matches:
+```sql
+SELECT id, searched_alias, parties, listing_date
+FROM similar_matches
+WHERE reviewed = FALSE
+ORDER BY created_at DESC;
+```
+
+Mark a match as reviewed:
+```sql
+UPDATE similar_matches SET reviewed = TRUE WHERE id = 42;
+```
+
+If a match is actually legitimate (e.g. a spelling variant the court used),
+add it as an alias so future scrapes capture it automatically:
+```sql
+-- Find the builder_id
+SELECT id FROM builders WHERE builder_name = 'Vogue Homes';
+
+-- Add the new alias
+INSERT INTO builder_aliases (builder_id, alias_name)
+VALUES (1, 'Capital Construction');
+```
+
+The next scrape for that builder will search the new alias and any matches
+will land in `court_listings` as normal.
+
+---
+
+## Schema changes
+
+The `postgres_data/` bind mount persists the database on the host filesystem.
+PostgreSQL only runs `schema.sql` when initialising an empty data directory,
+so after schema changes you need to recreate it:
+
+```bash
+docker compose down
+rm -rf postgres_data    # Linux/Mac
+# On Windows: rd /s /q postgres_data
+docker compose up -d db
+```
+
+This resets all data. If you need to preserve data, apply the migration
+manually instead:
+```bash
+docker compose exec db psql -U scraper_user -d court_scraper
+```
+Then paste the new DDL (e.g. `CREATE TABLE IF NOT EXISTS similar_matches ...`).
 
 ---
 
