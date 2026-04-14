@@ -29,7 +29,7 @@ services:
     environment:
       DB_HOST: db    # override .env — reach the db service, not the host
     ports:
-      - "127.0.0.1:5001:5001"
+      - "5001:5001"
     restart: unless-stopped
 
   scraper:
