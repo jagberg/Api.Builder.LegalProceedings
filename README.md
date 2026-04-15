@@ -75,19 +75,22 @@ Verify:
 curl http://localhost:5001/builders
 ```
 
-### Set up the daily scrape cron
+### Set up the scheduled scrape cron
 
 ```bash
+mkdir -p ~/logs
 crontab -e
 ```
 
 Add:
 ```
-30 2 * * * curl -s -X POST http://localhost:5001/builders/scrape >> ~/logs/court-scraper.log 2>&1
+* * * * * curl -s -X POST 'http://localhost:5001/builders/scrape?batchSize=5' >> ~/logs/court-scraper.log 2>&1
 ```
 
-This calls `POST /builders/scrape` at 02:30 daily. Builders are only scraped
-when their `scrape_interval_days` has elapsed since `last_scraped_at`.
+This calls `POST /builders/scrape?batchSize=5` **every minute**. Each call
+scrapes at most 5 builders (oldest-due first), so load is naturally paced
+across the day. Builders are only selected when their `scrape_interval_days`
+has elapsed since `last_scraped_at`, so most invocations do nothing.
 
 ### Deploying updates (manual)
 

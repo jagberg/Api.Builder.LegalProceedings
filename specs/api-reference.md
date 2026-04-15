@@ -108,9 +108,10 @@ interface SimilarMatch {
 }
 
 interface HearingsResponse {
-  builderName: string;       // canonical name e.g. "Vogue Homes"
-  searchedFor: string;       // what was passed in the URL
-  resolvedAlias: boolean;    // true when searchedFor !== builderName
+  builderName: string | null;      // null when ephemeral (no builder was created)
+  searchedFor: string;             // what was passed in the URL
+  resolvedAlias: boolean;          // true when searchedFor !== builderName
+  ephemeral: boolean;              // true when nothing was persisted (see scenarios)
   aliases: string[];
   total: number;
   offset: number;
@@ -215,8 +216,13 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
 { "error": "limit and offset must be integers" }
 ```
 
+**Search behaviour — three scenarios**
+
+1. **Builder already exists** (name matches a registered builder or alias): a fresh scrape runs for that builder, then DB data is returned. `hearings` has confirmed matches, `similarMatches` has unreviewed fuzzy ones. `ephemeral: false`.
+2. **Unknown name, at least one exact word-boundary match in upstream results**: a builder is auto-created using the **"trading as" name** as its canonical name (the search term and short name become aliases). Exact matches go to `hearings`, fuzzy to `similarMatches`. `ephemeral: false`.
+3. **Unknown name, no exact match in upstream** (e.g. short/ambiguous term like "Metri"): **nothing is persisted**. Upstream results are returned in `similarMatches` as a preview with `id: null`. `ephemeral: true`, `builderName: null`.
+
 **Notes**
-- If the builder name is unknown, the API auto-creates it (20-day scrape interval) and runs a live search against the NSW registry. ALL results go to `similarMatches` for review — `hearings` stays empty until the user approves aliases via the approve endpoint. This means a search always returns results — no 404.
 - Results ordered by `listingDate ASC`, `listingTime ASC`
 - `presidingOfficer` is frequently `null` — the NSW registry does not always populate it
 - `listingTime` is `HH:MM:SS` (24h). The raw NSW API returns "9:15 am" — the DB normalises it
@@ -227,18 +233,36 @@ GET /builders/Capitol%20Constructions/hearings   ← same results
 
 ### POST /similar-matches/{id}/approve
 
-Approve a similar match — adds the `searchedAlias` as a new builder alias and marks the match as reviewed. Future scrapes will capture results for this alias automatically.
+Approve a similar match — adds an alias to a builder and marks the match as reviewed. Future scrapes will capture results for this alias automatically.
 
 ```
 POST /similar-matches/3/approve
 ```
 
-**Response 200**
+**Optional body** (all fields optional):
 ```json
-{ "id": 3, "approved": true, "aliasAdded": "Capitol Constructions" }
+{
+  "customAlias": "Capital Constructions",
+  "mergeIntoBuilderId": 7
+}
 ```
 
-**Response 404** — match not found
+| Field | Default | Effect |
+|---|---|---|
+| `customAlias` | `searchedAlias` from the match | Use this name for the new alias instead of the original search term |
+| `mergeIntoBuilderId` | the match's own builder | Attach the alias to a different builder (the similar match stays on its original builder for traceability) |
+
+**Response 200**
+```json
+{
+  "id": 3,
+  "approved": true,
+  "aliasAdded": "Capital Constructions",
+  "builderId": 1
+}
+```
+
+**Response 404** — match (or target builder, if `mergeIntoBuilderId` given) not found
 **Response 409** — already reviewed
 
 ---
@@ -257,6 +281,32 @@ POST /similar-matches/3/dismiss
 ```
 
 **Response 404** — match not found or already reviewed
+
+---
+
+### POST /builders/{id}/merge-into/{targetId}
+
+Merge one builder into another. All aliases, hearings, and similar matches from the source builder move to the target; the source builder is deleted.
+
+```
+POST /builders/5/merge-into/8
+```
+
+**Response 200**
+```json
+{
+  "sourceId": 5,
+  "targetId": 8,
+  "targetName": "METRICON HOMES PTY LTD",
+  "aliasesMoved": 2,
+  "conflictsDropped": 0,
+  "listingsMoved": 14,
+  "similarMoved": 3
+}
+```
+
+**Response 400** — `sourceId == targetId`
+**Response 404** — source or target builder not found
 
 ---
 
@@ -291,15 +341,31 @@ export async function getHearings(
   return res.json();
 }
 
-// Approve a similar match — adds it as an alias for future scrapes
-export async function approveSimilarMatch(id: number) {
-  const res = await fetch(`${API}/similar-matches/${id}/approve`, { method: 'POST' });
+// Approve a similar match — adds it as an alias. Optionally override the
+// alias name or redirect to a different builder.
+export async function approveSimilarMatch(
+  id: number,
+  opts: { customAlias?: string; mergeIntoBuilderId?: number } = {}
+) {
+  const res = await fetch(`${API}/similar-matches/${id}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
   return res.json();
 }
 
 // Dismiss a similar match — removes it from the list without adding an alias
 export async function dismissSimilarMatch(id: number) {
   const res = await fetch(`${API}/similar-matches/${id}/dismiss`, { method: 'POST' });
+  return res.json();
+}
+
+// Merge one builder into another — for when duplicates are discovered
+export async function mergeBuilders(sourceId: number, targetId: number) {
+  const res = await fetch(`${API}/builders/${sourceId}/merge-into/${targetId}`, {
+    method: 'POST',
+  });
   return res.json();
 }
 ```

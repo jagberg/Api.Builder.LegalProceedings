@@ -43,6 +43,8 @@ from scraper.db import (
     insert_similar_match,
 )
 from scraper.main import run
+from scraper.matching import alias_matches_parties
+from scraper.parties import extract_short_name_before_trading_as, extract_trading_name
 
 load_dotenv()
 
@@ -74,6 +76,154 @@ _RUN_RESULT_KEY_MAP = {
 def _camelize_run_result(result: dict) -> dict:
     """Transform scraper.main.run() dict keys to camelCase for JSON output."""
     return {_RUN_RESULT_KEY_MAP.get(k, k): v for k, v in result.items()}
+
+
+def _live_search(term: str) -> list[dict]:
+    """Call the NSW registry API for `term`. Return a list of raw hit dicts."""
+    try:
+        client_api = RegistryClient()
+        return list(client_api.search(term))
+    except Exception as exc:
+        logger.error(f"Live search failed for {term!r}: {exc}")
+        return []
+
+
+def _split_exact_vs_fuzzy(term: str, raw_hits: list[dict]) -> tuple[list, list]:
+    """Split raw hits into (exact, fuzzy) by word-boundary match against parties."""
+    exact, fuzzy = [], []
+    for raw in raw_hits:
+        listing = parse_listing(raw)
+        if not listing["external_id"]:
+            continue
+        if alias_matches_parties(term, listing["parties"]):
+            exact.append(listing)
+        else:
+            fuzzy.append(listing)
+    return exact, fuzzy
+
+
+def _hit_to_similar_match_dict(listing: dict) -> dict:
+    """Shape an (unpersisted) listing as a SimilarMatch for the ephemeral path."""
+    return {
+        "id":            None,   # no DB id — ephemeral
+        "searchedAlias": None,
+        "externalId":    listing["external_id"],
+        "caseNumber":    listing.get("case_number"),
+        "parties":       listing.get("parties"),
+        "listingDate":   str(listing["listing_date"]) if listing.get("listing_date") else None,
+        "createdAt":     None,
+    }
+
+
+def _ephemeral_response(searched_for: str, fuzzy_hits: list, limit: int, offset: int) -> dict:
+    """Build the response for a search that didn't match any builder exactly."""
+    return {
+        "builderName":    None,
+        "searchedFor":    searched_for,
+        "resolvedAlias":  False,
+        "ephemeral":      True,
+        "aliases":        [],
+        "total":          0,
+        "offset":         offset,
+        "limit":          limit,
+        "hearings":       [],
+        "similarMatches": [_hit_to_similar_match_dict(l) for l in fuzzy_hits],
+    }
+
+
+def _create_or_find_builder_for_search(conn, searched_for: str, exact_hits: list) -> dict:
+    """
+    Create a builder for a new search with exact matches, or find and reuse an
+    existing one when the extracted trading-as name already exists.
+    Adds the searched_for term and (when found) the short trading-as name as aliases.
+    """
+    # Prefer the trading-as name from the first exact hit
+    first_parties = exact_hits[0].get("parties")
+    trading_name = extract_trading_name(first_parties)
+    short_name   = extract_short_name_before_trading_as(first_parties)
+
+    canonical = trading_name or searched_for
+
+    existing = _find_builder_by_name_or_alias(conn, canonical)
+    if existing:
+        # Merge new search into existing builder
+        _ensure_alias(conn, existing["id"], searched_for)
+        if short_name and short_name != canonical:
+            _ensure_alias(conn, existing["id"], short_name)
+        logger.info(
+            f"Reused existing builder {canonical!r} for search {searched_for!r}"
+        )
+        return existing
+
+    # Create a new builder with the trading-as name as canonical
+    create_builder(conn, canonical, scrape_interval_days=20)
+    new_builder = _find_builder_by_name_or_alias(conn, canonical)
+    if searched_for != canonical:
+        _ensure_alias(conn, new_builder["id"], searched_for)
+    if short_name and short_name != canonical and short_name != searched_for:
+        _ensure_alias(conn, new_builder["id"], short_name)
+    logger.info(
+        f"Created builder {canonical!r} from search {searched_for!r}"
+    )
+    return new_builder
+
+
+def _persist_hits(conn, builder_id: int, searched_for: str,
+                  exact_hits: list, fuzzy_hits: list) -> None:
+    """
+    Persist exact hits as court_listings and fuzzy hits as similar_matches.
+    Uses a fresh scrape_run for traceability.
+    """
+    from scraper.db import start_run, finish_run, upsert_listing, update_builders_last_scraped
+
+    run_id = start_run(conn)
+    inserted = 0
+    try:
+        for listing in exact_hits:
+            is_new = upsert_listing(conn, builder_id, searched_for, run_id, listing)
+            if is_new:
+                inserted += 1
+        for listing in fuzzy_hits:
+            insert_similar_match(conn, builder_id, searched_for, listing)
+        finish_run(conn, run_id, "success",
+                   aliases_processed=1,
+                   listings_found=len(exact_hits) + len(fuzzy_hits),
+                   listings_new=inserted)
+        update_builders_last_scraped(conn, {builder_id})
+    except Exception as exc:
+        logger.exception("Persist failed")
+        finish_run(conn, run_id, "failed", 1, 0, 0, str(exc))
+
+
+def _find_builder_by_name_or_alias(conn, name: str) -> dict | None:
+    """Return {id, builder_name} for a builder matching name (canonical or alias)."""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT b.id, b.builder_name
+              FROM builders b
+         LEFT JOIN builder_aliases ba ON ba.builder_id = b.id
+             WHERE b.is_active = 1
+               AND (b.builder_name = %s OR ba.alias_name = %s)
+            """,
+            (name, name),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def _ensure_alias(conn, builder_id: int, alias_name: str) -> None:
+    """Add an alias to a builder, no-op if it already exists."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO builder_aliases (builder_id, alias_name)
+            VALUES (%s, %s)
+            ON CONFLICT (alias_name) DO NOTHING
+            """,
+            (builder_id, alias_name),
+        )
+    conn.commit()
 
 
 def _get_builder_aliases(conn, builder_name: str) -> list | None:
@@ -173,59 +323,44 @@ def get_hearings(name: str):
     except ValueError:
         return jsonify({"error": "limit and offset must be integers"}), 400
 
-    # ------------------------------------------------------------------
-    # Resolve the name against both primary builder names and aliases.
-    # "Capitol Constructions" and "Vogue Homes" both resolve to the same
-    # builder_id so their hearings are always returned together.
-    # ------------------------------------------------------------------
     try:
         conn = get_connection()
         try:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT DISTINCT b.id, b.builder_name
-                      FROM builders b
-                 LEFT JOIN builder_aliases ba ON ba.builder_id = b.id
-                     WHERE b.is_active = 1
-                       AND (b.builder_name = %s OR ba.alias_name = %s)
-                    """,
-                    (searched_for, searched_for),
+            builder = _find_builder_by_name_or_alias(conn, searched_for)
+
+            if builder:
+                # Scenario 3 — existing builder. Scrape for fresh data, then return.
+                # Skip scraping in test mode to keep tests fast and deterministic.
+                if not app.config.get("TESTING"):
+                    aliases_list = _get_builder_aliases(conn, builder["builder_name"])
+                    conn.close()
+                    try:
+                        run(aliases=aliases_list)
+                    except Exception as exc:
+                        logger.error(f"Refresh scrape failed for {searched_for!r}: {exc}")
+                    conn = get_connection()
+                ephemeral = False
+            else:
+                # Live search against NSW registry. Routing depends on whether
+                # any result contains the search term as a whole word.
+                raw_hits = _live_search(searched_for)
+                exact_hits, fuzzy_hits = _split_exact_vs_fuzzy(searched_for, raw_hits)
+
+                if not exact_hits:
+                    # Scenario 2 — no persistence. Return ephemeral preview.
+                    return jsonify(
+                        _ephemeral_response(searched_for, fuzzy_hits, limit, offset)
+                    ), 200
+
+                # Scenario 1 — exact matches exist. Create or merge into a builder.
+                builder = _create_or_find_builder_for_search(
+                    conn, searched_for, exact_hits,
                 )
-                builder = cur.fetchone()
-
-            if not builder:
-                # Auto-create the builder, then do a live search.
-                # ALL results go to similar_matches for review — nothing
-                # goes to court_listings until the user approves aliases.
-                create_builder(conn, searched_for, scrape_interval_days=20)
-                logger.info(
-                    f"Auto-created builder {searched_for!r} via hearings search"
-                )
-
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(
-                        "SELECT id, builder_name FROM builders "
-                        "WHERE builder_name = %s",
-                        (searched_for,),
-                    )
-                    builder = cur.fetchone()
-
-                try:
-                    client_api = RegistryClient()
-                    for raw in client_api.search(searched_for):
-                        listing = parse_listing(raw)
-                        if listing["external_id"]:
-                            insert_similar_match(
-                                conn, builder["id"], searched_for, listing,
-                            )
-                except Exception as exc:
-                    logger.error(
-                        f"Live search failed for {searched_for!r}: {exc}"
-                    )
+                _persist_hits(conn, builder["id"], searched_for, exact_hits, fuzzy_hits)
+                ephemeral = False
 
             builder_id   = builder["id"]
-            builder_name = builder["builder_name"]   # canonical primary name
+            builder_name = builder["builder_name"]
 
             with conn.cursor() as cur:
                 cur.execute(
@@ -336,6 +471,7 @@ def get_hearings(name: str):
         "builderName":    builder_name,
         "searchedFor":    searched_for,
         "resolvedAlias":  searched_for != builder_name,
+        "ephemeral":      ephemeral,
         "aliases":        aliases,
         "total":          total,
         "offset":         offset,
@@ -352,18 +488,28 @@ def get_hearings(name: str):
 
 @app.route("/builders/scrape", methods=["POST"])
 def scrape_all():
+    # batchSize caps the number of BUILDERS scraped per call — staggering load
+    # across frequent cron invocations. All aliases of each selected builder
+    # are processed atomically.
+    batch_size: int | None
+    try:
+        raw_batch = request.args.get("batchSize")
+        batch_size = int(raw_batch) if raw_batch else None
+    except ValueError:
+        return jsonify({"error": "batchSize must be an integer"}), 400
+
     try:
         conn = get_connection()
         try:
-            # due_only=True: skips builders whose interval hasn't elapsed yet
-            aliases = fetch_active_aliases(conn, due_only=True)
+            aliases = fetch_active_aliases(conn, due_only=True, batch_size=batch_size)
         finally:
             conn.close()
     except Exception as exc:
         logger.exception("DB connection failed")
         return jsonify({"error": str(exc)}), 500
 
-    logger.info(f"/builders/scrape: {len(aliases)} alias(es) due for scraping")
+    logger.info(f"/builders/scrape: {len(aliases)} alias(es) due for scraping "
+                f"(batchSize={batch_size})")
 
     try:
         result = run(aliases=aliases)
@@ -422,12 +568,16 @@ def scrape_builder(name: str):
 
 @app.route("/similar-matches/<int:match_id>/approve", methods=["POST"])
 def approve_similar(match_id: int):
+    body = request.get_json(silent=True) or {}
+    custom_alias   = body.get("customAlias")
+    merge_target   = body.get("mergeIntoBuilderId")
+
     try:
         conn = get_connection()
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT id, builder_id, searched_alias, reviewed "
+                    "SELECT id, builder_id, searched_alias, external_id, reviewed "
                     "FROM similar_matches WHERE id = %s",
                     (match_id,),
                 )
@@ -439,15 +589,27 @@ def approve_similar(match_id: int):
             if match["reviewed"]:
                 return jsonify({"error": "Already reviewed"}), 409
 
-            # Add the searched alias as a new builder alias
+            target_builder_id = merge_target if merge_target else match["builder_id"]
+            alias_name        = custom_alias or match["searched_alias"]
+
+            # Verify target builder exists
+            if merge_target:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM builders WHERE id = %s", (merge_target,))
+                    if cur.fetchone() is None:
+                        return jsonify({"error": f"Target builder not found: {merge_target}"}), 404
+
             with conn.cursor() as cur:
+                # Upsert — moves an existing alias to the target builder if
+                # mergeIntoBuilderId was supplied, or inserts fresh otherwise.
                 cur.execute(
                     """
                     INSERT INTO builder_aliases (builder_id, alias_name)
                     VALUES (%s, %s)
-                    ON CONFLICT (alias_name) DO NOTHING
+                    ON CONFLICT (alias_name) DO UPDATE
+                        SET builder_id = EXCLUDED.builder_id
                     """,
-                    (match["builder_id"], match["searched_alias"]),
+                    (target_builder_id, alias_name),
                 )
                 cur.execute(
                     "UPDATE similar_matches SET reviewed = TRUE WHERE id = %s",
@@ -461,9 +623,10 @@ def approve_similar(match_id: int):
         return jsonify({"error": str(exc)}), 500
 
     return jsonify({
-        "id":       match_id,
-        "approved": True,
-        "aliasAdded": match["searched_alias"],
+        "id":             match_id,
+        "approved":       True,
+        "aliasAdded":     alias_name,
+        "builderId":      target_builder_id,
     }), 200
 
 
@@ -493,6 +656,85 @@ def dismiss_similar(match_id: int):
         return jsonify({"error": f"Similar match not found or already reviewed: {match_id}"}), 404
 
     return jsonify({"id": match_id, "dismissed": True}), 200
+
+
+# ---------------------------------------------------------------------------
+# POST /builders/<id>/merge-into/<targetId> — merge one builder into another
+# Silent dedupe on conflicting aliases (target wins).
+# ---------------------------------------------------------------------------
+
+@app.route("/builders/<int:source_id>/merge-into/<int:target_id>", methods=["POST"])
+def merge_builders(source_id: int, target_id: int):
+    if source_id == target_id:
+        return jsonify({"error": "Cannot merge a builder into itself"}), 400
+
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT id, builder_name FROM builders WHERE id IN (%s, %s)",
+                    (source_id, target_id),
+                )
+                rows = {row["id"]: row for row in cur.fetchall()}
+
+            if source_id not in rows:
+                return jsonify({"error": f"Source builder not found: {source_id}"}), 404
+            if target_id not in rows:
+                return jsonify({"error": f"Target builder not found: {target_id}"}), 404
+
+            with conn.cursor() as cur:
+                # Delete source aliases that would conflict with target aliases
+                cur.execute(
+                    """
+                    DELETE FROM builder_aliases
+                     WHERE builder_id = %s
+                       AND alias_name IN (
+                           SELECT alias_name FROM builder_aliases WHERE builder_id = %s
+                       )
+                    """,
+                    (source_id, target_id),
+                )
+                conflicts_dropped = cur.rowcount
+
+                # Move remaining aliases to target
+                cur.execute(
+                    "UPDATE builder_aliases SET builder_id = %s WHERE builder_id = %s",
+                    (target_id, source_id),
+                )
+                aliases_moved = cur.rowcount
+
+                # Move listings and similar matches (external_id is globally unique,
+                # so no in-table conflicts possible)
+                cur.execute(
+                    "UPDATE court_listings SET builder_id = %s WHERE builder_id = %s",
+                    (target_id, source_id),
+                )
+                listings_moved = cur.rowcount
+
+                cur.execute(
+                    "UPDATE similar_matches SET builder_id = %s WHERE builder_id = %s",
+                    (target_id, source_id),
+                )
+                similar_moved = cur.rowcount
+
+                cur.execute("DELETE FROM builders WHERE id = %s", (source_id,))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.exception("Merge failed")
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({
+        "sourceId":         source_id,
+        "targetId":         target_id,
+        "targetName":       rows[target_id]["builder_name"],
+        "aliasesMoved":     aliases_moved,
+        "conflictsDropped": conflicts_dropped,
+        "listingsMoved":    listings_moved,
+        "similarMoved":     similar_moved,
+    }), 200
 
 
 if __name__ == "__main__":

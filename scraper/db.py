@@ -22,14 +22,18 @@ def get_connection():
     )
 
 
-def fetch_active_aliases(conn, due_only: bool = False) -> list[dict]:
+def fetch_active_aliases(conn, due_only: bool = False,
+                          batch_size: int | None = None) -> list[dict]:
     """
     Return aliases for all active builders.
 
-    due_only=True  — only include builders whose last_scraped_at is older than
-                     their scrape_interval_days, or who have never been scraped.
-                     Used by the daily cron so infrequent builders are skipped.
-    due_only=False — return all active aliases regardless of interval (default).
+    due_only=True   — only include builders whose last_scraped_at is older than
+                      their scrape_interval_days, or who have never been scraped.
+                      Used by the cron so infrequent builders are skipped.
+    due_only=False  — return all active aliases regardless of interval (default).
+    batch_size=N    — limit to the oldest-due N builders (NOT N aliases).
+                      Use with due_only=True to stagger load. All aliases of each
+                      selected builder are returned so the scrape stays atomic.
     """
     due_filter = """
         AND (
@@ -37,6 +41,21 @@ def fetch_active_aliases(conn, due_only: bool = False) -> list[dict]:
             OR b.last_scraped_at < NOW() - (b.scrape_interval_days || ' days')::INTERVAL
         )
     """ if due_only else ""
+
+    if batch_size is None:
+        builder_subquery = ""
+    else:
+        # Oldest-due first: NULL last_scraped_at ranks highest
+        builder_subquery = f"""
+            AND b.id IN (
+                SELECT id FROM builders
+                 WHERE is_active = 1
+                 {due_filter}
+                 ORDER BY last_scraped_at ASC NULLS FIRST
+                 LIMIT {int(batch_size)}
+            )
+        """
+        due_filter = ""   # Already applied in the subquery
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
@@ -49,6 +68,7 @@ def fetch_active_aliases(conn, due_only: bool = False) -> list[dict]:
               JOIN builders b ON ba.builder_id = b.id
              WHERE b.is_active = 1
              {due_filter}
+             {builder_subquery}
              ORDER BY b.id, ba.id
             """
         )

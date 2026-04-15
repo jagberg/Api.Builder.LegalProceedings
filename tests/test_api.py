@@ -50,25 +50,42 @@ class TestListBuilders:
 # ---------------------------------------------------------------------------
 
 class TestGetHearings:
-    def test_unknown_builder_auto_creates_with_empty_results(self, client, clean_db, mock_nsw_empty):
-        """Searching an unknown builder auto-creates it and returns 200."""
+    def test_unknown_builder_no_results_is_ephemeral(self, client, clean_db, mock_nsw_empty):
+        """Unknown builder + no upstream results → ephemeral response, no builder created."""
         r = client.get("/builders/Nobody/hearings")
         assert r.status_code == 200
-        assert r.json["builderName"] == "Nobody"
+        assert r.json["ephemeral"] is True
+        assert r.json["builderName"] is None
         assert r.json["hearings"] == []
         assert r.json["similarMatches"] == []
-        # Builder should now exist
+        # Builder must NOT exist
         r2 = client.get("/builders")
         names = [b["builderName"] for b in r2.json["builders"]]
-        assert "Nobody" in names
+        assert "Nobody" not in names
 
-    def test_unknown_builder_results_go_to_similar_matches(self, client, clean_db, mock_nsw_api):
-        """For a new builder, ALL upstream results go to similarMatches, not hearings."""
-        r = client.get("/builders/New Builder/hearings")
+    def test_unknown_builder_with_exact_match_creates_from_trading_as(self, client, db_conn, clean_db, mock_nsw_api):
+        """Exact match + 'trading as' pattern → builder created with trading-as as canonical name."""
+        # MOCK_HIT parties: "John Smith v CAPITOL CONSTRUCTIONS PTY LTD trading as VOGUE HOMES NSW"
+        # Searching 'Capitol Constructions' matches as a whole word.
+        r = client.get("/builders/Capitol Constructions/hearings")
         assert r.status_code == 200
+        assert r.json["ephemeral"] is False
+        # Canonical name is the trading-as extract
+        assert r.json["builderName"] == "VOGUE HOMES NSW"
+        assert "Capitol Constructions" in r.json["aliases"]
+        assert r.json["total"] == 1
+
+    def test_unknown_builder_no_exact_match_returns_ephemeral_similar(self, client, clean_db, mock_nsw_api):
+        """Search term with no whole-word match → ephemeral, all results in similarMatches."""
+        # MOCK_HIT parties does NOT contain "Metri" as a whole word
+        r = client.get("/builders/Metri/hearings")
+        assert r.status_code == 200
+        assert r.json["ephemeral"] is True
+        assert r.json["builderName"] is None
         assert r.json["hearings"] == []
-        assert r.json["total"] == 0
-        assert len(r.json["similarMatches"]) > 0
+        assert len(r.json["similarMatches"]) == 1
+        # Ephemeral similar matches have id=None
+        assert r.json["similarMatches"][0]["id"] is None
 
     def test_returns_empty_when_no_listings(self, client, seed_vogue):
         r = client.get("/builders/Vogue Homes/hearings")
@@ -246,6 +263,124 @@ class TestScrapeAll:
         assert r.json["aliasesProcessed"] == 0
         assert r.json["listingsFound"] == 0
 
+    def test_batch_size_limits_builders(self, client, db_conn, clean_db, mock_nsw_empty):
+        """batchSize caps the number of builders (not aliases) processed."""
+        with db_conn.cursor() as cur:
+            for name in ("Builder A", "Builder B", "Builder C"):
+                cur.execute(
+                    "INSERT INTO builders (builder_name, scrape_interval_days) "
+                    "VALUES (%s, 1) RETURNING id", (name,),
+                )
+                bid = cur.fetchone()[0]
+                cur.execute(
+                    "INSERT INTO builder_aliases (builder_id, alias_name) VALUES (%s, %s)",
+                    (bid, name),
+                )
+        db_conn.commit()
+
+        r = client.post("/builders/scrape?batchSize=2")
+        assert r.status_code == 200
+        # 2 builders × 1 alias each = 2 aliases processed
+        assert r.json["aliasesProcessed"] == 2
+
+    def test_invalid_batch_size_returns_400(self, client, clean_db):
+        r = client.post("/builders/scrape?batchSize=abc")
+        assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /builders/<id>/merge-into/<targetId>
+# ---------------------------------------------------------------------------
+
+class TestMergeBuilders:
+    def test_merge_moves_aliases_and_listings(self, client, db_conn, clean_db):
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO builders (builder_name, scrape_interval_days) "
+                "VALUES ('Source Ltd', 1) RETURNING id"
+            )
+            source_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO builder_aliases (builder_id, alias_name) VALUES "
+                "(%s, 'Source Ltd'), (%s, 'Source Alias')",
+                (source_id, source_id),
+            )
+            cur.execute(
+                "INSERT INTO builders (builder_name, scrape_interval_days) "
+                "VALUES ('Target Ltd', 1) RETURNING id"
+            )
+            target_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO builder_aliases (builder_id, alias_name) VALUES "
+                "(%s, 'Target Ltd')",
+                (target_id,),
+            )
+        db_conn.commit()
+
+        r = client.post(f"/builders/{source_id}/merge-into/{target_id}")
+        assert r.status_code == 200
+        assert r.json["aliasesMoved"] == 2  # Both source aliases non-conflicting
+        assert r.json["conflictsDropped"] == 0
+
+        # Source builder gone, target has all aliases
+        r2 = client.get("/builders")
+        names = [b["builderName"] for b in r2.json["builders"]]
+        assert "Source Ltd" not in names
+        target = next(b for b in r2.json["builders"] if b["builderName"] == "Target Ltd")
+        assert set(target["aliases"]) == {"Target Ltd", "Source Ltd", "Source Alias"}
+
+    def test_merge_moves_listings_and_similar(self, client, db_conn, clean_db):
+        """Hearings and similar_matches move to the target builder."""
+        with db_conn.cursor() as cur:
+            cur.execute("INSERT INTO builders (builder_name) VALUES ('Src') RETURNING id")
+            src = cur.fetchone()[0]
+            cur.execute("INSERT INTO builders (builder_name) VALUES ('Tgt') RETURNING id")
+            tgt = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO scrape_runs (status) VALUES ('success') RETURNING id"
+            )
+            run_id = cur.fetchone()[0]
+            cur.execute(
+                """
+                INSERT INTO court_listings (
+                    external_id, builder_id, matched_alias, case_number, parties,
+                    first_seen_run, last_seen_run
+                ) VALUES ('ext1', %s, 'Src', 'C1', 'Ali v SRC PTY LTD', %s, %s)
+                """,
+                (src, run_id, run_id),
+            )
+            cur.execute(
+                """
+                INSERT INTO similar_matches (builder_id, searched_alias, external_id, parties)
+                VALUES (%s, 'Src', 'extsim1', 'Bob v SRCX')
+                """,
+                (src,),
+            )
+        db_conn.commit()
+
+        r = client.post(f"/builders/{src}/merge-into/{tgt}")
+        assert r.status_code == 200
+        assert r.json["listingsMoved"] == 1
+        assert r.json["similarMoved"] == 1
+
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT builder_id FROM court_listings WHERE external_id = 'ext1'")
+            assert cur.fetchone()[0] == tgt
+            cur.execute("SELECT builder_id FROM similar_matches WHERE external_id = 'extsim1'")
+            assert cur.fetchone()[0] == tgt
+
+    def test_merge_self_returns_400(self, client, db_conn, seed_vogue):
+        r = client.post(f"/builders/{seed_vogue}/merge-into/{seed_vogue}")
+        assert r.status_code == 400
+
+    def test_merge_unknown_source_returns_404(self, client, seed_vogue):
+        r = client.post(f"/builders/99999/merge-into/{seed_vogue}")
+        assert r.status_code == 404
+
+    def test_merge_unknown_target_returns_404(self, client, seed_vogue):
+        r = client.post(f"/builders/{seed_vogue}/merge-into/99999")
+        assert r.status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # Scrape filter: exact vs similar matches
@@ -369,6 +504,53 @@ class TestSimilarMatchActions:
 
     def test_approve_not_found_returns_404(self, client, clean_db):
         r = client.post("/similar-matches/99999/approve")
+        assert r.status_code == 404
+
+    def test_approve_with_custom_alias(self, client, db_conn, seed_vogue):
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        r = client.post(
+            f"/similar-matches/{match_id}/approve",
+            json={"customAlias": "Capital Constructions"},
+        )
+        assert r.status_code == 200
+        assert r.json["aliasAdded"] == "Capital Constructions"
+        r2 = client.get("/builders")
+        b = next(b for b in r2.json["builders"] if b["builderName"] == "Vogue Homes")
+        assert "Capital Constructions" in b["aliases"]
+        assert "Capitol Constructions" in b["aliases"]  # original still there
+
+    def test_approve_with_merge_into_builder_id(self, client, db_conn, seed_vogue):
+        """mergeIntoBuilderId redirects the alias to a different builder."""
+        # Create a second builder
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO builders (builder_name) VALUES ('Other Builder') RETURNING id"
+            )
+            other_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO builder_aliases (builder_id, alias_name) VALUES (%s, 'Other Builder')",
+                (other_id,),
+            )
+        db_conn.commit()
+
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        r = client.post(
+            f"/similar-matches/{match_id}/approve",
+            json={"mergeIntoBuilderId": other_id},
+        )
+        assert r.status_code == 200
+        assert r.json["builderId"] == other_id
+        # The alias got added to the OTHER builder, not Vogue Homes
+        r2 = client.get("/builders")
+        other = next(b for b in r2.json["builders"] if b["builderName"] == "Other Builder")
+        assert "Capitol Constructions" in other["aliases"]
+
+    def test_approve_with_unknown_merge_target_returns_404(self, client, db_conn, seed_vogue):
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        r = client.post(
+            f"/similar-matches/{match_id}/approve",
+            json={"mergeIntoBuilderId": 99999},
+        )
         assert r.status_code == 404
 
     def test_dismiss_marks_reviewed(self, client, db_conn, seed_vogue):
