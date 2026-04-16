@@ -568,6 +568,8 @@ def scrape_builder(name: str):
 
 @app.route("/similar-matches/<int:match_id>/approve", methods=["POST"])
 def approve_similar(match_id: int):
+    from scraper.db import start_run, finish_run, upsert_listing
+
     body = request.get_json(silent=True) or {}
     custom_alias   = body.get("customAlias")
     merge_target   = body.get("mergeIntoBuilderId")
@@ -577,7 +579,8 @@ def approve_similar(match_id: int):
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT id, builder_id, searched_alias, external_id, reviewed "
+                    "SELECT id, builder_id, searched_alias, external_id, "
+                    "       raw_json, reviewed "
                     "FROM similar_matches WHERE id = %s",
                     (match_id,),
                 )
@@ -600,8 +603,7 @@ def approve_similar(match_id: int):
                         return jsonify({"error": f"Target builder not found: {merge_target}"}), 404
 
             with conn.cursor() as cur:
-                # Upsert — moves an existing alias to the target builder if
-                # mergeIntoBuilderId was supplied, or inserts fresh otherwise.
+                # Upsert alias — moves it to the target builder if it exists elsewhere.
                 cur.execute(
                     """
                     INSERT INTO builder_aliases (builder_id, alias_name)
@@ -616,6 +618,23 @@ def approve_similar(match_id: int):
                     (match_id,),
                 )
             conn.commit()
+
+            # Re-parse raw_json and insert into court_listings so the
+            # hearing data is immediately available in the hearings list.
+            listing_created = False
+            if match["raw_json"]:
+                raw = match["raw_json"]
+                if isinstance(raw, str):
+                    import json
+                    raw = json.loads(raw)
+                listing = parse_listing(raw)
+                if listing["external_id"]:
+                    run_id = start_run(conn)
+                    is_new = upsert_listing(
+                        conn, target_builder_id, alias_name, run_id, listing,
+                    )
+                    finish_run(conn, run_id, "success", 0, 1, 1 if is_new else 0)
+                    listing_created = is_new
         finally:
             conn.close()
     except Exception as exc:
@@ -627,6 +646,7 @@ def approve_similar(match_id: int):
         "approved":       True,
         "aliasAdded":     alias_name,
         "builderId":      target_builder_id,
+        "listingCreated": listing_created,
     }), 200
 
 

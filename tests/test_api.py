@@ -438,19 +438,32 @@ class TestScrapeFilter:
 
 class TestSimilarMatchActions:
     def _seed_similar_match(self, db_conn, builder_id):
-        """Insert a similar match and return its id."""
+        """Insert a similar match with raw_json and return its id."""
+        import json
+        raw = {
+            "id": "fuzzy001",
+            "scm_case_number": "2025/00999999",
+            "case_title": "Jane Doe v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD",
+            "scm_dateyear": "1 May 2026",
+            "time_listed": "10:00 am",
+            "scm_jurisdiction_court_short": "NCAT CCD",
+            "location": "NCAT Sydney (CCD)",
+            "court_room_name": "Courtroom 2",
+            "scm_jurisdiction_type": "NCAT",
+            "jl_listing_type_ds": "Directions Hearing",
+        }
         with db_conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO similar_matches (builder_id, searched_alias, external_id,
-                    case_number, parties, listing_date)
+                    case_number, parties, listing_date, raw_json)
                 VALUES (%s, 'Capitol Constructions', 'fuzzy001',
                     '2025/00999999',
                     'Jane Doe v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD',
-                    '2026-05-01')
+                    '2026-05-01', %s)
                 RETURNING id
                 """,
-                (builder_id,),
+                (builder_id, json.dumps(raw)),
             )
             match_id = cur.fetchone()[0]
         db_conn.commit()
@@ -462,11 +475,30 @@ class TestSimilarMatchActions:
         assert r.status_code == 200
         assert r.json["approved"] is True
         assert r.json["aliasAdded"] == "Capitol Constructions"
+        assert r.json["listingCreated"] is True
 
         # Verify reviewed flag
         with db_conn.cursor() as cur:
             cur.execute("SELECT reviewed FROM similar_matches WHERE id = %s", (match_id,))
             assert cur.fetchone()[0] is True
+
+    def test_approve_creates_court_listing_from_raw_json(self, client, db_conn, seed_vogue):
+        """Approving a similar match re-parses raw_json into a full court listing."""
+        match_id = self._seed_similar_match(db_conn, seed_vogue)
+        client.post(f"/similar-matches/{match_id}/approve")
+
+        # The listing should now appear in hearings
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT case_number, court, courtroom, listing_type "
+                "FROM court_listings WHERE external_id = 'fuzzy001'"
+            )
+            row = cur.fetchone()
+        assert row is not None
+        assert row[0] == "2025/00999999"
+        assert row[1] == "NCAT CCD"
+        assert row[2] == "Courtroom 2"
+        assert row[3] == "Directions Hearing"
 
     def test_approve_alias_appears_in_builder(self, client, db_conn, clean_db):
         """After approve, the alias shows up in GET /builders."""
