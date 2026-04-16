@@ -580,7 +580,7 @@ def approve_similar(match_id: int):
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     "SELECT id, builder_id, searched_alias, external_id, "
-                    "       raw_json, reviewed "
+                    "       parties, raw_json, reviewed "
                     "FROM similar_matches WHERE id = %s",
                     (match_id,),
                 )
@@ -593,7 +593,12 @@ def approve_similar(match_id: int):
                 return jsonify({"error": "Already reviewed"}), 409
 
             target_builder_id = merge_target if merge_target else match["builder_id"]
-            alias_name        = custom_alias or match["searched_alias"]
+
+            # Default alias: respondent name from parties (the actual company),
+            # not searchedAlias (which may be a short/generic search term like "dove").
+            from scraper.parties import extract_respondent_name
+            default_alias = extract_respondent_name(match["parties"]) or match["searched_alias"]
+            alias_name    = custom_alias or default_alias
 
             # Verify target builder exists
             if merge_target:

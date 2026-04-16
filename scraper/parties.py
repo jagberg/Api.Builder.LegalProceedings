@@ -26,6 +26,21 @@ def extract_trading_name(parties: str | None) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def extract_respondent_name(parties: str | None) -> str | None:
+    """
+    Return the respondent (after ' v '), stripped of leading/trailing whitespace.
+    Returns None if parties is empty or has no ' v ' separator.
+
+    Example:
+      "Jane Doe v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD"
+        -> "CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD"
+    """
+    if not parties:
+        return None
+    parts = re.split(r"\s+v\s+", parties, maxsplit=1)
+    return parts[1].strip() if len(parts) == 2 else None
+
+
 def extract_short_name_before_trading_as(parties: str | None) -> str | None:
     """
     Return the token that appears just before 'trading as'. Useful for

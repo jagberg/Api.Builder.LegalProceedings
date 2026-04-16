@@ -469,12 +469,14 @@ class TestSimilarMatchActions:
         db_conn.commit()
         return match_id
 
-    def test_approve_adds_alias_and_marks_reviewed(self, client, db_conn, seed_vogue):
+    def test_approve_uses_respondent_name_as_default_alias(self, client, db_conn, seed_vogue):
+        """Default alias is the respondent name from parties, not searchedAlias."""
         match_id = self._seed_similar_match(db_conn, seed_vogue)
         r = client.post(f"/similar-matches/{match_id}/approve")
         assert r.status_code == 200
         assert r.json["approved"] is True
-        assert r.json["aliasAdded"] == "Capitol Constructions"
+        # Respondent from "Jane Doe v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD"
+        assert r.json["aliasAdded"] == "CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD"
         assert r.json["listingCreated"] is True
 
         # Verify reviewed flag
@@ -526,7 +528,8 @@ class TestSimilarMatchActions:
         client.post(f"/similar-matches/{match_id}/approve")
         r = client.get("/builders")
         b = next(b for b in r.json["builders"] if b["builderName"] == "Test Builder")
-        assert "Test Alias" in b["aliases"]
+        # Default alias is the respondent name from parties, not searchedAlias
+        assert "TEST ALIAS PTY LTD" in b["aliases"]
 
     def test_approve_already_reviewed_returns_409(self, client, db_conn, seed_vogue):
         match_id = self._seed_similar_match(db_conn, seed_vogue)
@@ -572,10 +575,10 @@ class TestSimilarMatchActions:
         )
         assert r.status_code == 200
         assert r.json["builderId"] == other_id
-        # The alias got added to the OTHER builder, not Vogue Homes
+        # The respondent name was added to the OTHER builder, not Vogue Homes
         r2 = client.get("/builders")
         other = next(b for b in r2.json["builders"] if b["builderName"] == "Other Builder")
-        assert "Capitol Constructions" in other["aliases"]
+        assert "CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD" in other["aliases"]
 
     def test_approve_with_unknown_merge_target_returns_404(self, client, db_conn, seed_vogue):
         match_id = self._seed_similar_match(db_conn, seed_vogue)

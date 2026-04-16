@@ -2,7 +2,7 @@
 test_parties.py — unit tests for trading-as parsing helpers.
 """
 
-from scraper.parties import extract_trading_name, extract_short_name_before_trading_as
+from scraper.parties import extract_respondent_name, extract_trading_name, extract_short_name_before_trading_as
 
 
 class TestExtractTradingName:
@@ -36,6 +36,27 @@ class TestExtractTradingName:
 
     def test_trailing_whitespace_stripped(self):
         assert extract_trading_name("A v B trading as XYZ PTY LTD   ") == "XYZ PTY LTD"
+
+
+class TestExtractRespondentName:
+    def test_standard_case(self):
+        assert extract_respondent_name(
+            "Jane Doe v CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD"
+        ) == "CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD"
+
+    def test_trading_as_included(self):
+        assert extract_respondent_name(
+            "Oscar Downing v CAPITOL CONSTRUCTIONS PTY. LIMITED trading as VOGUE HOMES NSW"
+        ) == "CAPITOL CONSTRUCTIONS PTY. LIMITED trading as VOGUE HOMES NSW"
+
+    def test_no_v_separator_returns_none(self):
+        assert extract_respondent_name("Some text without separator") is None
+
+    def test_none_input(self):
+        assert extract_respondent_name(None) is None
+
+    def test_empty_string(self):
+        assert extract_respondent_name("") is None
 
 
 class TestExtractShortNameBeforeTradingAs:
