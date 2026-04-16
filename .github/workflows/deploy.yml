@@ -19,7 +19,9 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run unit tests (no DB required)
-        run: pytest tests/test_client.py -v
+        run: pytest tests/test_client.py tests/test_matching.py tests/test_parties.py -v
+        env:
+          PYTHONPATH: ${{ github.workspace }}
 
   deploy:
     name: Deploy

@@ -22,3 +22,5 @@ jobs:
 
       - name: Run live API smoke tests
         run: pytest tests/test_live.py -v
+        env:
+          PYTHONPATH: ${{ github.workspace }}
