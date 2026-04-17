@@ -52,7 +52,7 @@ curl -X POST http://localhost:5001/builders/Vogue%20Homes/scrape
 
 **Astro env setup** — add to your Astro project's `.env`:
 ```
-PUBLIC_API_URL=http://52.63.163.160:5001
+PUBLIC_API_URL=https://api.bilder.com.au
 ```
 
 ---
@@ -60,8 +60,8 @@ PUBLIC_API_URL=http://52.63.163.160:5001
 ## Base URL
 
 ```
-http://localhost:5001          # local dev
-http://52.63.163.160:5001     # production
+http://localhost:5001             # local dev
+https://api.bilder.com.au         # production (HTTPS via nginx + Let's Encrypt)
 ```
 
 All responses are `Content-Type: application/json`. All JSON keys and query parameters use camelCase.
@@ -316,7 +316,7 @@ POST /builders/5/merge-into/8
 ## Fetch examples (Astro / TypeScript)
 
 ```ts
-const API = import.meta.env.PUBLIC_API_URL ?? 'http://52.63.163.160:5001';
+const API = import.meta.env.PUBLIC_API_URL ?? 'https://api.bilder.com.au';
 
 // Load all builders for the grouped page list
 export async function getBuilders(): Promise<Builder[]> {

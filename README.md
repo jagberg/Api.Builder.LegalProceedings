@@ -73,7 +73,10 @@ docker compose up -d --build api
 |---|---|
 | **Lightsail instance** | `api-builder-legalproceedings`, Ubuntu 24.04, Sydney (ap-southeast-2) |
 | **Static IP** | `52.63.163.160` attached to the instance |
-| **Firewall rules** | SSH (22), HTTP (80), Custom TCP (5001) — all open to any IPv4 |
+| **Domain** | `api.bilder.com.au` → static IP (Cloudflare DNS, grey-cloud / DNS-only) |
+| **Firewall rules** | SSH (22), HTTP (80), HTTPS (443), Custom TCP (5001) — all open to any IPv4 |
+| **Web server** | nginx reverse proxy on 80/443, proxies to Flask on localhost:5001 |
+| **TLS** | Let's Encrypt cert via certbot, auto-renews |
 | **Docker services** | `db` (Postgres 16) + `api` (Flask on port 5001) |
 
 ### First-time instance setup
@@ -109,6 +112,41 @@ crontab -e
 # Add:
 # * * * * * curl -s -X POST 'http://localhost:5001/builders/scrape?batchSize=5' >> ~/logs/court-scraper.log 2>&1
 ```
+
+### HTTPS setup (nginx + Let's Encrypt)
+
+Cloudflare Workers block outbound `fetch()` to plain HTTP, so the API must be served over HTTPS. nginx acts as a reverse proxy to the Flask container, with a Let's Encrypt cert provisioned via certbot.
+
+**Prerequisites**: DNS A record for `api.bilder.com.au` → `52.63.163.160` (Cloudflare, **DNS only** — grey cloud, not proxied, so Let's Encrypt can reach the origin for validation). Port 443 open in the Lightsail firewall.
+
+On the instance:
+```bash
+sudo apt update && sudo apt install -y nginx certbot python3-certbot-nginx
+
+sudo tee /etc/nginx/sites-available/api-builder <<'EOF'
+server {
+    listen 80;
+    server_name api.bilder.com.au;
+
+    location / {
+        proxy_pass http://localhost:5001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+
+sudo ln -sf /etc/nginx/sites-available/api-builder /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+
+sudo certbot --nginx -d api.bilder.com.au --non-interactive --agree-tos \
+  -m justin.goldberg@compareclub.com.au --redirect
+```
+
+certbot modifies the nginx config to serve HTTPS on 443, redirects HTTP→HTTPS, and installs a systemd timer to auto-renew the cert before it expires.
 
 ### Keys and secrets setup
 
