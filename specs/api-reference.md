@@ -98,8 +98,8 @@ interface Hearing {
 }
 
 interface SimilarMatch {
-  id: number;                      // use this ID for approve/dismiss actions
-  searchedAlias: string;           // the alias that was searched
+  id: number | null;               // null for ephemeral results (no builder created)
+  searchedAlias: string | null;    // the alias that was searched; null for ephemeral
   externalId: string;
   caseNumber: string;
   parties: string;                 // party names — inspect to decide if it's a real match
@@ -249,16 +249,19 @@ POST /similar-matches/3/approve
 
 | Field | Default | Effect |
 |---|---|---|
-| `customAlias` | `searchedAlias` from the match | Use this name for the new alias instead of the original search term |
+| `customAlias` | Respondent name from the case parties | Override the alias name. Default is the respondent's name extracted from the `parties` field (e.g. "CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD"), not the original search term. |
 | `mergeIntoBuilderId` | the match's own builder | Attach the alias to a different builder (the similar match stays on its original builder for traceability) |
+
+The approve action also **promotes the hearing** — the similar match's `raw_json` is re-parsed and inserted into `court_listings`, so the hearing immediately appears in the `hearings` array on the next request.
 
 **Response 200**
 ```json
 {
   "id": 3,
   "approved": true,
-  "aliasAdded": "Capital Constructions",
-  "builderId": 1
+  "aliasAdded": "CAPITAL CONSTRUCTION AND REFURBISHING PTY LTD",
+  "builderId": 1,
+  "listingCreated": true
 }
 ```
 
