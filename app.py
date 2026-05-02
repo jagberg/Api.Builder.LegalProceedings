@@ -204,7 +204,7 @@ def _find_builder_by_name_or_alias(conn, name: str) -> dict | None:
               FROM builders b
          LEFT JOIN builder_aliases ba ON ba.builder_id = b.id
              WHERE b.is_active = 1
-               AND (b.builder_name = %s OR ba.alias_name = %s)
+               AND (LOWER(b.builder_name) = LOWER(%s) OR LOWER(ba.alias_name) = LOWER(%s))
             """,
             (name, name),
         )
@@ -233,7 +233,7 @@ def _get_builder_aliases(conn, builder_name: str) -> list | None:
     """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            "SELECT id FROM builders WHERE builder_name = %s AND is_active = 1",
+            "SELECT id FROM builders WHERE LOWER(builder_name) = LOWER(%s) AND is_active = 1",
             (builder_name,),
         )
         builder = cur.fetchone()

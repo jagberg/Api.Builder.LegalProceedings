@@ -1,0 +1,25 @@
+# Agent OS Standards Index
+
+api:
+  route-registration-order:
+    description: Flask literal routes must register before wildcard routes of the same shape
+
+database:
+  alias-resolution:
+    description: Builder lookups must join builder_aliases and use DISTINCT to resolve any alias to its parent builder
+  matched-alias:
+    description: Every court_listing stores the alias that discovered it — set at upsert, never updated
+  upsert-immutability:
+    description: court_listings upsert rules — which fields are immutable vs refreshed on conflict
+
+scraper:
+  alias-matching:
+    description: alias_matches_parties() rules — respondent-only, word-boundary, company indicator for single-word searches
+  run-entry-point:
+    description: run() in scraper.main is the sole entry point for all scrape operations — CLI, Flask, and cron
+  scrape-intervals:
+    description: Only two intervals used — 1 for seeded daily builders, 20 for auto-created builders
+
+testing:
+  test-structure:
+    description: Unit vs integration vs live split, clean_db fixture pattern, NSW API mock approach

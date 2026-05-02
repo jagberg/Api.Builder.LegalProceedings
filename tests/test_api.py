@@ -106,6 +106,14 @@ class TestGetHearings:
         assert h["listingDate"] == "2026-04-22"
         assert h["court"] == "NCAT CCD"
 
+    def test_alias_lookup_is_case_insensitive(self, client, seed_listing, mock_nsw_empty):
+        """Lowercase alias must resolve to builder — lookup must be case-insensitive."""
+        r = client.get("/builders/capitol constructions/hearings")
+        assert r.status_code == 200
+        assert r.json["ephemeral"] is False
+        assert r.json["builderName"] == "Vogue Homes"
+        assert r.json["total"] == 1
+
     def test_alias_resolves_to_same_results(self, client, seed_listing):
         """Capitol Constructions must return identical hearings to Vogue Homes."""
         by_primary = client.get("/builders/Vogue Homes/hearings").json
