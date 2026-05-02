@@ -155,6 +155,33 @@ def _create_or_find_builder_for_search(conn, searched_for: str, exact_hits: list
         )
         return existing
 
+    # Name lookup missed — check if any exact hits share external_ids with
+    # stored hearings. Handles the case where the same company was previously
+    # found under a shorter alias (e.g. "Masterton" vs "Masterton Homes Pty Ltd").
+    external_ids = [h["external_id"] for h in exact_hits if h.get("external_id")]
+    if external_ids:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT b.id, b.builder_name
+                  FROM court_listings cl
+                  JOIN builders b ON b.id = cl.builder_id
+                 WHERE cl.external_id = ANY(%s) AND b.is_active = 1
+                """,
+                (external_ids,)
+            )
+            via_listings = cur.fetchone()
+        if via_listings:
+            existing = dict(via_listings)
+            _ensure_alias(conn, existing["id"], searched_for)
+            if short_name and short_name != searched_for:
+                _ensure_alias(conn, existing["id"], short_name)
+            logger.info(
+                f"Reused existing builder {existing['builder_name']!r} "
+                f"via hearing external_id for search {searched_for!r}"
+            )
+            return existing
+
     # Create a new builder with the trading-as name as canonical
     create_builder(conn, canonical, scrape_interval_days=20)
     new_builder = _find_builder_by_name_or_alias(conn, canonical)

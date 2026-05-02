@@ -106,6 +106,18 @@ class TestGetHearings:
         assert h["listingDate"] == "2026-04-22"
         assert h["court"] == "NCAT CCD"
 
+    def test_long_name_search_resolves_to_existing_builder_via_external_id(
+        self, client, seed_listing, mock_nsw_long_name
+    ):
+        """Searching full company name returns existing builder when its hearings share external_ids."""
+        r = client.get("/builders/Capitol Constructions Pty Ltd/hearings")
+        assert r.status_code == 200
+        assert r.json["ephemeral"] is False
+        assert r.json["builderName"] == "Vogue Homes"
+        assert r.json["total"] == 1
+        # Alias should have been added automatically
+        assert "Capitol Constructions Pty Ltd" in r.json["aliases"]
+
     def test_alias_lookup_is_case_insensitive(self, client, seed_listing, mock_nsw_empty):
         """Lowercase alias must resolve to builder — lookup must be case-insensitive."""
         r = client.get("/builders/capitol constructions/hearings")

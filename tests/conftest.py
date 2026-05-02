@@ -33,6 +33,21 @@ MOCK_HIT = {
     "jl_listing_type_ds": "Contested Hearing",
 }
 
+MOCK_HIT_LONG_NAME = {
+    "id": "test001ContestedHearing",   # same external_id as MOCK_HIT — already in DB
+    "scm_case_number": "2025/00100001",
+    "case_title": "John Smith v CAPITOL CONSTRUCTIONS PTY LTD",
+    "scm_dateyear": "22 Apr 2026",
+    "time_listed": "9:15 am",
+    "scm_jurisdiction_court_short": "NCAT CCD",
+    "location": "NCAT Liverpool (CCD)",
+    "court_room_name": "Courtroom 3",
+    "scm_jurisdiction_type": "NCAT",
+    "jl_listing_type_ds": "Contested Hearing",
+}
+
+MOCK_NSW_LONG_NAME = {"hits": [MOCK_HIT_LONG_NAME], "total": 1, "offset": 0, "count": 30}
+
 MOCK_HIT_FUZZY = {
     "id": "test002FuzzyMatch",
     "scm_case_number": "2025/00200002",
@@ -172,6 +187,16 @@ def mock_nsw_empty():
     mock_resp = Mock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = MOCK_NSW_EMPTY
+    with patch("requests.Session.get", return_value=mock_resp):
+        yield
+
+
+@pytest.fixture()
+def mock_nsw_long_name():
+    """Patch requests.Session.get to return a hit whose external_id already exists in DB."""
+    mock_resp = Mock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = MOCK_NSW_LONG_NAME
     with patch("requests.Session.get", return_value=mock_resp):
         yield
 
