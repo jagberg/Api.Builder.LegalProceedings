@@ -37,7 +37,7 @@ def main():
     )
 
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO scrape_runs (status) VALUES ('migration') RETURNING id")
+        cur.execute("INSERT INTO scrape_runs (status) VALUES ('success') RETURNING id")
         migration_run_id = cur.fetchone()[0]
     conn.commit()
 
