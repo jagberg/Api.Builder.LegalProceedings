@@ -65,9 +65,10 @@ $$ LANGUAGE plpgsql;
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS court_listings (
     id                SERIAL       PRIMARY KEY,
-    external_id       VARCHAR(128) NOT NULL,
-    builder_id        INTEGER      NOT NULL REFERENCES builders(id),
-    matched_alias     VARCHAR(255) NOT NULL,
+    external_id          VARCHAR(128) NOT NULL,
+    builder_id           INTEGER      NOT NULL REFERENCES builders(id),
+    matched_alias        VARCHAR(255) NOT NULL,
+    builder_is_applicant BOOLEAN      NOT NULL DEFAULT FALSE,
 
     -- Core listing fields (mapped from NSW registry API response)
     case_number       VARCHAR(64),

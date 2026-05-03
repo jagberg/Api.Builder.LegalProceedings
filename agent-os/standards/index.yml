@@ -6,7 +6,7 @@ api:
 
 database:
   alias-resolution:
-    description: Builder lookups must join builder_aliases and use DISTINCT to resolve any alias to its parent builder
+    description: Builder lookups use LOWER() case-insensitive join on builder_aliases; fall back to court_listings external_id if name lookup misses
   matched-alias:
     description: Every court_listing stores the alias that discovered it — set at upsert, never updated
   upsert-immutability:
@@ -14,7 +14,7 @@ database:
 
 scraper:
   alias-matching:
-    description: alias_matches_parties() rules — respondent-only, word-boundary, company indicator for single-word searches
+    description: alias_match_side() returns 'respondent'|'applicant'|None — checks both sides of "v", word-boundary, company indicator for single-word aliases
   run-entry-point:
     description: run() in scraper.main is the sole entry point for all scrape operations — CLI, Flask, and cron
   scrape-intervals:

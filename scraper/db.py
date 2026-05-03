@@ -157,24 +157,26 @@ def finish_run(conn, run_id: int, status: str, aliases_processed: int,
 
 
 def upsert_listing(conn, builder_id: int, matched_alias: str, run_id: int,
-                   listing: dict) -> bool:
+                   listing: dict, builder_is_applicant: bool = False) -> bool:
     """
     Insert or update a court listing.
     Returns True if this is a new record, False if updated.
+
+    builder_is_applicant is immutable — set at insert, never updated on conflict.
 
     xmax = 0 on a just-written row means it was inserted, not updated —
     the standard PostgreSQL idiom inside ON CONFLICT DO UPDATE.
     """
     sql = """
         INSERT INTO court_listings (
-            external_id, builder_id, matched_alias,
+            external_id, builder_id, matched_alias, builder_is_applicant,
             case_number, parties,
             listing_date, listing_time,
             court, location, courtroom,
             jurisdiction, listing_type, presiding_officer,
             raw_json, first_seen_run, last_seen_run
         ) VALUES (
-            %(external_id)s, %(builder_id)s, %(matched_alias)s,
+            %(external_id)s, %(builder_id)s, %(matched_alias)s, %(builder_is_applicant)s,
             %(case_number)s, %(parties)s,
             %(listing_date)s, %(listing_time)s,
             %(court)s, %(location)s, %(courtroom)s,
@@ -196,10 +198,11 @@ def upsert_listing(conn, builder_id: int, matched_alias: str, run_id: int,
     """
     params = {
         **listing,
-        "builder_id":    builder_id,
-        "matched_alias": matched_alias,
-        "run_id":        run_id,
-        "raw_json":      json.dumps(listing.get("raw_json", {})),
+        "builder_id":           builder_id,
+        "matched_alias":        matched_alias,
+        "builder_is_applicant": builder_is_applicant,
+        "run_id":               run_id,
+        "raw_json":             json.dumps(listing.get("raw_json", {})),
     }
 
     with conn.cursor() as cur:

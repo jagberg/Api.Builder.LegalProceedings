@@ -6,16 +6,16 @@ The NSW Registry API does substring/fuzzy matching on nameOfParty, so
 REFURBISHING PTY LTD".  This module provides a word-boundary check
 to separate exact matches from near-misses.
 
-Matching is restricted to the respondent side of the "v" separator
-(the builder in building disputes).  Single-word search terms also
-require a company indicator (Pty, Ltd, Homes, etc.) in the respondent
-text to avoid matching personal surnames.
+Matching checks both sides of the "v" separator — the builder may appear
+as either the respondent (being sued) or the applicant (suing another party).
+Single-word search terms also require a company indicator (Pty, Ltd, Homes,
+etc.) in the matched text to avoid matching personal surnames.
 """
 
 import re
 
-# Company indicators — when a single-word alias matches, the respondent
-# text must also contain at least one of these (case-insensitive).
+# Company indicators — when a single-word alias matches, the matched side
+# must also contain at least one of these (case-insensitive).
 _COMPANY_INDICATORS = re.compile(
     r"\b(?:Pty|Ltd|Limited|P/L|Inc|Corp|Homes|Constructions|Construction|"
     r"Builders|Building|Group|Holdings|Properties|Development|Developments|"
@@ -25,35 +25,33 @@ _COMPANY_INDICATORS = re.compile(
 )
 
 
-def _extract_respondent(parties: str) -> str:
+def alias_match_side(alias: str, parties: str | None) -> str | None:
     """
-    Return the respondent portion of a parties string (after ' v ').
-    Falls back to the full string when no ' v ' separator is found.
-    """
-    parts = re.split(r"\s+v\s+", parties, maxsplit=1)
-    return parts[1] if len(parts) == 2 else parties
+    Return 'respondent', 'applicant', or None.
 
+    Checks both sides of the ' v ' separator for a word-boundary match
+    (case-insensitive). Respondent side takes priority when both sides match.
+    Single-word aliases require a company indicator on the matched side
+    to avoid matching personal surnames.
 
-def alias_matches_parties(alias: str, parties: str | None) -> bool:
-    """
-    Return True if `alias` appears as contiguous whole words in the
-    **respondent** side of `parties` (case-insensitive).
-
-    For single-word aliases, the respondent must also contain a company
-    indicator (Pty, Ltd, Homes, etc.) to avoid matching personal surnames.
-
-    Returns False when parties is None or empty.
+    Returns None when parties is None, empty, or no match found.
     """
     if not parties:
-        return False
+        return None
 
-    respondent = _extract_respondent(parties)
     pattern = r"(?<!\w)" + re.escape(alias) + r"(?!\w)"
-    if not re.search(pattern, respondent, re.IGNORECASE):
-        return False
+    is_multi_word = len(alias.split()) > 1
+    parts = re.split(r"\s+v\s+", parties, maxsplit=1)
+    respondent = parts[1] if len(parts) == 2 else parties
 
-    # Single-word aliases need a company indicator to confirm it's a business
-    if len(alias.split()) == 1:
-        return bool(_COMPANY_INDICATORS.search(respondent))
+    if re.search(pattern, respondent, re.IGNORECASE):
+        if is_multi_word or bool(_COMPANY_INDICATORS.search(respondent)):
+            return "respondent"
 
-    return True
+    if len(parts) == 2:
+        applicant = parts[0]
+        if re.search(pattern, applicant, re.IGNORECASE):
+            if is_multi_word or bool(_COMPANY_INDICATORS.search(applicant)):
+                return "applicant"
+
+    return None

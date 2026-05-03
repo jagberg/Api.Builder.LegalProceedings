@@ -155,6 +155,79 @@ def seed_listing(db_conn, seed_vogue):
     return "test001ContestedHearing"
 
 
+@pytest.fixture()
+def seed_masterton(db_conn, clean_db):
+    """Builder 'Masterton' with aliases covering single-word and full legal name."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO builders (builder_name, scrape_interval_days) VALUES ('Masterton', 1) RETURNING id"
+        )
+        builder_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO builder_aliases (builder_id, alias_name) VALUES "
+            "(%s, 'Masterton'), (%s, 'Masterton Homes'), (%s, 'MASTERTON HOMES PTY LIMITED')",
+            (builder_id, builder_id, builder_id),
+        )
+    db_conn.commit()
+    return builder_id
+
+
+@pytest.fixture()
+def seed_respondent_case(db_conn, seed_masterton):
+    """Listing where Masterton is the RESPONDENT (person suing builder)."""
+    with db_conn.cursor() as cur:
+        cur.execute("INSERT INTO scrape_runs (status) VALUES ('success') RETURNING id")
+        run_id = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO court_listings (
+                external_id, builder_id, matched_alias, builder_is_applicant,
+                case_number, parties, listing_date, listing_time,
+                court, location, courtroom, jurisdiction, listing_type,
+                raw_json, first_seen_run, last_seen_run
+            ) VALUES (
+                'golden_respondent_001', %s, 'Masterton', FALSE,
+                '2025/00111001',
+                'John Smith v MASTERTON HOMES PTY LIMITED',
+                '2026-05-10', '09:00:00',
+                'NCAT CCD', 'NCAT Sydney (CCD)', 'Courtroom 1',
+                'NCAT', 'Contested Hearing',
+                '{}', %s, %s
+            )
+            """,
+            (seed_masterton, run_id, run_id),
+        )
+    db_conn.commit()
+
+
+@pytest.fixture()
+def seed_applicant_case(db_conn, seed_masterton):
+    """Listing where Masterton is the APPLICANT (builder suing someone else)."""
+    with db_conn.cursor() as cur:
+        cur.execute("INSERT INTO scrape_runs (status) VALUES ('success') RETURNING id")
+        run_id = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO court_listings (
+                external_id, builder_id, matched_alias, builder_is_applicant,
+                case_number, parties, listing_date, listing_time,
+                court, location, courtroom, jurisdiction, listing_type,
+                raw_json, first_seen_run, last_seen_run
+            ) VALUES (
+                'golden_applicant_001', %s, 'Masterton', TRUE,
+                '2025/00222002',
+                'MASTERTON HOMES PTY LIMITED v IDEALCORP PTY LIMITED',
+                '2026-05-12', '10:00:00',
+                'NCAT CCD', 'NCAT Sydney (CCD)', 'Courtroom 2',
+                'NCAT', 'Directions Hearing',
+                '{}', %s, %s
+            )
+            """,
+            (seed_masterton, run_id, run_id),
+        )
+    db_conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Flask test client
 # ---------------------------------------------------------------------------

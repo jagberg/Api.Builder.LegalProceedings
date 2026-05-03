@@ -24,7 +24,7 @@ from scraper.db import (
     update_builders_last_scraped,
     upsert_listing,
 )
-from scraper.matching import alias_matches_parties
+from scraper.matching import alias_match_side
 
 load_dotenv()
 
@@ -98,7 +98,8 @@ def run(dry_run: bool = False, aliases: list[dict] | None = None) -> dict:
                     logger.warning(f"Listing missing external_id, skipping: {raw}")
                     continue
 
-                if not alias_matches_parties(alias_name, listing["parties"]):
+                side = alias_match_side(alias_name, listing["parties"])
+                if side is None:
                     logger.info(
                         f"Similar but non-exact match for {alias_name!r}: "
                         f"{listing['external_id']} parties={listing['parties']!r}"
@@ -110,10 +111,14 @@ def run(dry_run: bool = False, aliases: list[dict] | None = None) -> dict:
                 if dry_run:
                     logger.debug(
                         f"[DRY RUN] would upsert: {listing['external_id']} "
-                        f"builder_id={builder_id} matched_alias={alias_name!r}"
+                        f"builder_id={builder_id} matched_alias={alias_name!r} "
+                        f"side={side!r}"
                     )
                 else:
-                    is_new = upsert_listing(conn, builder_id, alias_name, run_id, listing)
+                    is_new = upsert_listing(
+                        conn, builder_id, alias_name, run_id, listing,
+                        builder_is_applicant=(side == "applicant"),
+                    )
                     if is_new:
                         listings_new += 1
 

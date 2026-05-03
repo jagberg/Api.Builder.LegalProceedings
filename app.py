@@ -43,7 +43,7 @@ from scraper.db import (
     insert_similar_match,
 )
 from scraper.main import run
-from scraper.matching import alias_matches_parties
+from scraper.matching import alias_match_side
 from scraper.parties import extract_short_name_before_trading_as, extract_trading_name
 
 load_dotenv()
@@ -88,18 +88,21 @@ def _live_search(term: str) -> list[dict]:
         return []
 
 
-def _split_exact_vs_fuzzy(term: str, raw_hits: list[dict]) -> tuple[list, list]:
-    """Split raw hits into (exact, fuzzy) by word-boundary match against parties."""
-    exact, fuzzy = [], []
+def _split_exact_vs_fuzzy(term: str, raw_hits: list[dict]) -> tuple[list, list, list]:
+    """Split raw hits into (respondent_exact, applicant_exact, fuzzy) by match side."""
+    respondent, applicant, fuzzy = [], [], []
     for raw in raw_hits:
         listing = parse_listing(raw)
         if not listing["external_id"]:
             continue
-        if alias_matches_parties(term, listing["parties"]):
-            exact.append(listing)
+        side = alias_match_side(term, listing["parties"])
+        if side == "respondent":
+            respondent.append(listing)
+        elif side == "applicant":
+            applicant.append(listing)
         else:
             fuzzy.append(listing)
-    return exact, fuzzy
+    return respondent, applicant, fuzzy
 
 
 def _hit_to_similar_match_dict(listing: dict) -> dict:
@@ -127,6 +130,7 @@ def _ephemeral_response(searched_for: str, fuzzy_hits: list, limit: int, offset:
         "offset":         offset,
         "limit":          limit,
         "hearings":       [],
+        "applicantCases": [],
         "similarMatches": [_hit_to_similar_match_dict(l) for l in fuzzy_hits],
     }
 
@@ -196,9 +200,9 @@ def _create_or_find_builder_for_search(conn, searched_for: str, exact_hits: list
 
 
 def _persist_hits(conn, builder_id: int, searched_for: str,
-                  exact_hits: list, fuzzy_hits: list) -> None:
+                  respondent_hits: list, applicant_hits: list, fuzzy_hits: list) -> None:
     """
-    Persist exact hits as court_listings and fuzzy hits as similar_matches.
+    Persist respondent and applicant hits as court_listings, fuzzy hits as similar_matches.
     Uses a fresh scrape_run for traceability.
     """
     from scraper.db import start_run, finish_run, upsert_listing, update_builders_last_scraped
@@ -206,15 +210,21 @@ def _persist_hits(conn, builder_id: int, searched_for: str,
     run_id = start_run(conn)
     inserted = 0
     try:
-        for listing in exact_hits:
-            is_new = upsert_listing(conn, builder_id, searched_for, run_id, listing)
+        for listing in respondent_hits:
+            is_new = upsert_listing(conn, builder_id, searched_for, run_id, listing,
+                                    builder_is_applicant=False)
+            if is_new:
+                inserted += 1
+        for listing in applicant_hits:
+            is_new = upsert_listing(conn, builder_id, searched_for, run_id, listing,
+                                    builder_is_applicant=True)
             if is_new:
                 inserted += 1
         for listing in fuzzy_hits:
             insert_similar_match(conn, builder_id, searched_for, listing)
         finish_run(conn, run_id, "success",
                    aliases_processed=1,
-                   listings_found=len(exact_hits) + len(fuzzy_hits),
+                   listings_found=len(respondent_hits) + len(applicant_hits) + len(fuzzy_hits),
                    listings_new=inserted)
         update_builders_last_scraped(conn, {builder_id})
     except Exception as exc:
@@ -371,7 +381,10 @@ def get_hearings(name: str):
                 # Live search against NSW registry. Routing depends on whether
                 # any result contains the search term as a whole word.
                 raw_hits = _live_search(searched_for)
-                exact_hits, fuzzy_hits = _split_exact_vs_fuzzy(searched_for, raw_hits)
+                respondent_hits, applicant_hits, fuzzy_hits = _split_exact_vs_fuzzy(
+                    searched_for, raw_hits
+                )
+                exact_hits = respondent_hits + applicant_hits
 
                 if not exact_hits:
                     # Scenario 2 — no persistence. Return ephemeral preview.
@@ -383,7 +396,8 @@ def get_hearings(name: str):
                 builder = _create_or_find_builder_for_search(
                     conn, searched_for, exact_hits,
                 )
-                _persist_hits(conn, builder["id"], searched_for, exact_hits, fuzzy_hits)
+                _persist_hits(conn, builder["id"], searched_for,
+                              respondent_hits, applicant_hits, fuzzy_hits)
                 ephemeral = False
 
             builder_id   = builder["id"]
@@ -396,29 +410,31 @@ def get_hearings(name: str):
                 )
                 aliases = [row[0] for row in cur.fetchall()]
 
-            conditions = ["cl.is_active = 1", "cl.builder_id = %s"]
-            params: list = [builder_id]
+            base_conditions = ["cl.is_active = 1", "cl.builder_id = %s"]
+            base_params: list = [builder_id]
 
             if from_date:
-                conditions.append("cl.listing_date >= %s")
-                params.append(from_date)
+                base_conditions.append("cl.listing_date >= %s")
+                base_params.append(from_date)
             if to_date:
-                conditions.append("cl.listing_date <= %s")
-                params.append(to_date)
+                base_conditions.append("cl.listing_date <= %s")
+                base_params.append(to_date)
 
-            where = " AND ".join(conditions)
+            hearing_conditions = base_conditions + ["cl.builder_is_applicant = FALSE"]
+            hearing_where = " AND ".join(hearing_conditions)
+
+            applicant_conditions = base_conditions + ["cl.builder_is_applicant = TRUE"]
+            applicant_where = " AND ".join(applicant_conditions)
 
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT COUNT(*) FROM court_listings cl WHERE {where}",
-                    params,
+                    f"SELECT COUNT(*) FROM court_listings cl WHERE {hearing_where}",
+                    base_params,
                 )
                 total = cur.fetchone()[0]
 
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    f"""
-                    SELECT cl.external_id,
+            _listing_cols = """
+                           cl.external_id,
                            cl.matched_alias,
                            cl.case_number,
                            cl.parties,
@@ -431,15 +447,32 @@ def get_hearings(name: str):
                            cl.listing_type,
                            cl.presiding_officer,
                            cl.created_at,
-                           cl.updated_at
+                           cl.updated_at"""
+
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT {_listing_cols}
                       FROM court_listings cl
-                     WHERE {where}
+                     WHERE {hearing_where}
                      ORDER BY cl.listing_date ASC, cl.listing_time ASC NULLS LAST
                      LIMIT %s OFFSET %s
                     """,
-                    params + [limit, offset],
+                    base_params + [limit, offset],
                 )
                 rows = cur.fetchall()
+
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT {_listing_cols}
+                      FROM court_listings cl
+                     WHERE {applicant_where}
+                     ORDER BY cl.listing_date ASC, cl.listing_time ASC NULLS LAST
+                    """,
+                    base_params,
+                )
+                applicant_rows = cur.fetchall()
 
             # Unreviewed similar matches for this builder
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -461,10 +494,8 @@ def get_hearings(name: str):
         logger.exception("DB query failed")
         return jsonify({"error": str(exc)}), 500
 
-    hearings = []
-    for row in rows:
-        d = dict(row)
-        hearings.append({
+    def _serialise_listing(d: dict) -> dict:
+        return {
             "externalId":       d["external_id"],
             "matchedAlias":     d["matched_alias"],
             "caseNumber":       d["case_number"],
@@ -479,7 +510,10 @@ def get_hearings(name: str):
             "presidingOfficer": d["presiding_officer"],
             "createdAt":        str(d["created_at"]) if d["created_at"] is not None else None,
             "updatedAt":        str(d["updated_at"]) if d["updated_at"] is not None else None,
-        })
+        }
+
+    hearings        = [_serialise_listing(dict(row)) for row in rows]
+    applicant_cases = [_serialise_listing(dict(row)) for row in applicant_rows]
 
     similar_matches = []
     for row in similar_rows:
@@ -504,6 +538,7 @@ def get_hearings(name: str):
         "offset":         offset,
         "limit":          limit,
         "hearings":       hearings,
+        "applicantCases": applicant_cases,
         "similarMatches": similar_matches,
     }), 200
 
