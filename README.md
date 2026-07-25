@@ -1,6 +1,25 @@
 # Builder Legal Proceedings API
 
-A Python scraper and Flask REST API that monitors NSW court listings for building companies. It queries the [NSW Online Registry](https://onlineregistry.lawlink.nsw.gov.au/content/court-lists), stores hearings in PostgreSQL, and serves them via a REST API consumed by an Astro frontend.
+People sign six-figure build contracts without knowing whether their builder is
+currently in front of a tribunal. That information is public — NSW publishes its
+court lists — but it's effectively unfindable, because a builder trades under
+several names and you have to already know which one to search.
+
+This API makes it findable. It reads the [NSW Online Registry](https://onlineregistry.lawlink.nsw.gov.au/content/court-lists)
+court lists, matches hearings to building companies across all their trading
+names, and serves the result to [bilder.com.au/builders](https://bilder.com.au/builders) —
+part of a free resource for a 78,000-member community of people building their
+first home.
+
+Two things it's careful about, because the subject matter deserves it: it only
+matches the **respondent** side of a case, and single-word searches additionally
+require a company indicator (Pty, Ltd, Homes, Constructions) so a personal
+surname can't be mistaken for a builder. Anything it isn't certain about goes to
+`similarMatches` for a human to approve or dismiss rather than being asserted as
+fact.
+
+**Source:** public NSW court listings only. No private records, no credit data,
+no personal information beyond what the court itself publishes.
 
 ## What it does
 
